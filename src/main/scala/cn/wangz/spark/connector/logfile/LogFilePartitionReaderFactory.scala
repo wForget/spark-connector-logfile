@@ -12,6 +12,10 @@ class LogFilePartitionReaderFactory(
     val p = partition.asInstanceOf[LogFilePartition]
     val conf = new Configuration()
     hadoopOptions.foreach { case (k, v) => conf.set(k, v) }
-    new LogFilePartitionReader(p.filePath, p.appId, p.dt, p.hour, fileFormat, conf)
+    if (fileFormat.equalsIgnoreCase("tfile")) {
+      new TFileLogFilePartitionReader(p.filePath, p.appId, p.dt, p.hour, conf)
+    } else {
+      new TextLogFilePartitionReader(p.filePath, p.appId, p.dt, p.hour, conf)
+    }
   }
 }
