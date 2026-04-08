@@ -30,10 +30,6 @@ class LogFileScanBuilder(options: CaseInsensitiveStringMap)
       case f: LessThanOrEqual    => Some(f.attribute)
       case _                     => None
     }
-    attr.exists(LogFileScanBuilder.PartitionColumns.contains(_))
+    attr.exists(a => LogFileTable.PARTITION_COLUMNS.contains(a.toLowerCase))
   }
-}
-
-object LogFileScanBuilder {
-  val PartitionColumns: Set[String] = Set("dt", "hour", "app_id")
 }

@@ -9,10 +9,16 @@ import scala.collection.mutable.ArrayBuffer
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.connector.logfile.{
+  CsvLogFilePartitionReaderFactory,
+  JsonLogFilePartitionReaderFactory,
+  TextLogFilePartitionReaderFactory
+}
 import org.apache.spark.sql.connector.read._
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.util.SerializableConfiguration
 
 class LogFileScan(
     options: CaseInsensitiveStringMap,
@@ -63,7 +69,8 @@ class LogFileScan(
         if (entry.isFile) {
           val appId = LogFileScan.extractAppId(name)
           if (matchesFilters(dt, hour, appId)) {
-            partitions += LogFilePartition(entry.getPath.toString, appId, dt, hour)
+            partitions += LogFilePartition(
+              entry.getPath.toString, appId, dt, hour, entry.getLen)
           }
         } else if (entry.isDirectory) {
           collectDirectoryPartitions(fs, entry, dt, hour, partitions)
@@ -74,8 +81,35 @@ class LogFileScan(
     partitions.toArray
   }
 
-  override def createReaderFactory(): PartitionReaderFactory =
-    new LogFilePartitionReaderFactory(fileFormat, hadoopOptions)
+  override def createReaderFactory(): PartitionReaderFactory = {
+    val format = fileFormat.toLowerCase
+    format match {
+      case "tfile" =>
+        new TFileLogFilePartitionReaderFactory(hadoopOptions)
+      case _ =>
+        val spark = SparkSession.active
+        val sqlConf = spark.sessionState.conf
+        val broadcastedConf = spark.sparkContext.broadcast(
+          new SerializableConfiguration(buildHadoopConf()))
+        val params = options.asCaseSensitiveMap().asScala.toMap
+        format match {
+          case "json" =>
+            JsonLogFilePartitionReaderFactory(
+              sqlConf, broadcastedConf,
+              LogFileTable.DATA_SCHEMA, LogFileTable.DATA_SCHEMA,
+              LogFileTable.PARTITION_SCHEMA, params)
+          case "csv" =>
+            CsvLogFilePartitionReaderFactory(
+              sqlConf, broadcastedConf,
+              LogFileTable.DATA_SCHEMA, LogFileTable.DATA_SCHEMA,
+              LogFileTable.PARTITION_SCHEMA, params)
+          case _ =>
+            TextLogFilePartitionReaderFactory(
+              sqlConf, broadcastedConf,
+              LogFileTable.DATA_SCHEMA, LogFileTable.PARTITION_SCHEMA, params)
+        }
+    }
+  }
 
   /**
    * V2 rolling structure: eventlog_v2_{appId}/{events_*, appstatus_*.compact}
@@ -103,11 +137,13 @@ class LogFileScan(
 
     fs.listStatus(dirEntry.getPath, (p: Path) => logFileFilter(p)).foreach { child =>
       if (child.isFile) {
-        partitions += LogFilePartition(child.getPath.toString, appId, dt, hour)
+        partitions += LogFilePartition(
+          child.getPath.toString, appId, dt, hour, child.getLen)
       } else if (child.isDirectory) {
         fs.listStatus(child.getPath, (p: Path) => logFileFilter(p)).foreach { nf =>
           if (nf.isFile) {
-            partitions += LogFilePartition(nf.getPath.toString, appId, dt, hour)
+            partitions += LogFilePartition(
+              nf.getPath.toString, appId, dt, hour, nf.getLen)
           }
         }
       }

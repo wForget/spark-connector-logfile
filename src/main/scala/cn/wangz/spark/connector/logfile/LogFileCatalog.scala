@@ -2,8 +2,7 @@ package cn.wangz.spark.connector.logfile
 
 import java.util
 
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.analysis.{NoSuchNamespaceException, NoSuchTableException, TableAlreadyExistsException}
+import org.apache.spark.sql.catalyst.analysis.{NoSuchNamespaceException, NoSuchTableException}
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
@@ -33,9 +32,7 @@ class LogFileCatalog extends CatalogPlugin with TableCatalog {
 
   override def loadTable(ident: Identifier): Table = {
     if (tableName.equalsIgnoreCase(ident.name())) {
-      val logDir = options.getOrDefault("logDir", "")
-      val paths = if (logDir.nonEmpty) Seq(logDir) else Seq.empty
-      new LogFileTable(SparkSession.active, options, paths, Some(LogFileTable.SCHEMA))
+      new LogFileTable(options)
     } else {
       throw new NoSuchTableException(ident)
     }

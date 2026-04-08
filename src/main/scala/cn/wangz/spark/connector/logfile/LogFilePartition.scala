@@ -6,4 +6,5 @@ case class LogFilePartition(
     filePath: String,
     appId: String,
     dt: String,
-    hour: String) extends InputPartition
+    hour: String,
+    fileSize: Long = -1L) extends InputPartition
