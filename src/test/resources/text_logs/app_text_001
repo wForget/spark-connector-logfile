@@ -1,0 +1,3 @@
+INFO Starting application
+WARN Low memory
+ERROR OutOfMemoryError
