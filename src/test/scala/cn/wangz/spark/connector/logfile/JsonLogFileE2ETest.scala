@@ -70,4 +70,36 @@ class JsonLogFileE2ETest extends LogFileTestBase {
       assert(appIds === Set("app_flat_001", "app_dir_001"))
     }
   }
+
+  test("infer schema from json log files") {
+    val logDir = resourcePath("json_extra_logs")
+    withCatalog("json_infer_cat", logDir, "json",
+      Map("inferSchema" -> "true")) {
+      val df = spark.sql("SELECT * FROM json_infer_cat.default.spark_log_file")
+
+      assert(df.columns.toSet === Set("level", "ts", "value", "dt", "hour", "app_id"))
+      assert(df.count() === 2)
+
+      val row1 = df.filter("value = 'event A'").select("level", "ts").collect()(0)
+      assert(row1.getString(0) === "INFO")
+      assert(row1.getString(1) === "2025-01-01")
+
+      val row2 = df.filter("value = 'event B'").select("level", "ts").collect()(0)
+      assert(row2.getString(0) === "ERROR")
+      assert(row2.isNullAt(1))
+    }
+  }
+
+  test("inferSchema=false uses default value-only schema for json") {
+    val logDir = resourcePath("json_extra_logs")
+    withCatalog("json_noinfer_cat", logDir, "json") {
+      val df = spark.sql("SELECT * FROM json_noinfer_cat.default.spark_log_file")
+
+      assert(df.columns.toSet === Set("value", "dt", "hour", "app_id"))
+      assert(df.count() === 2)
+
+      val values = df.select("value").collect().map(_.getString(0)).toSet
+      assert(values === Set("event A", "event B"))
+    }
+  }
 }

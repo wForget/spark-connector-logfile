@@ -19,4 +19,31 @@ class CsvLogFileE2ETest extends LogFileTestBase {
       assert(app2Values === Set("csv line 4", "csv line 5"))
     }
   }
+
+  test("infer schema from csv log files with header") {
+    val logDir = resourcePath("csv_infer_logs")
+    withCatalog("csv_infer_cat", logDir, "csv",
+      Map("inferSchema" -> "true", "header" -> "true")) {
+      val df = spark.sql("SELECT * FROM csv_infer_cat.default.spark_log_file")
+
+      assert(df.columns.toSet === Set("name", "age", "score", "dt", "hour", "app_id"))
+      assert(df.count() === 5)
+
+      val alice = df.filter("name = 'Alice'").select("age", "score").collect()(0)
+      assert(alice.getInt(0) === 30)
+      assert(alice.getDouble(1) === 95.5)
+
+      val appIds = df.select("app_id").distinct().collect().map(_.getString(0)).toSet
+      assert(appIds === Set("app_csv_infer_001", "app_csv_infer_002"))
+    }
+  }
+
+  test("inferSchema=false uses default value-only schema for csv") {
+    val logDir = resourcePath("csv_infer_logs")
+    withCatalog("csv_noinfer_cat", logDir, "csv") {
+      val df = spark.sql("SELECT * FROM csv_noinfer_cat.default.spark_log_file")
+
+      assert(df.columns.toSet === Set("value", "dt", "hour", "app_id"))
+    }
+  }
 }

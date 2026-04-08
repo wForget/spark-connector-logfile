@@ -7,7 +7,7 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.connector.logfile.{
   CsvLogFilePartitionReaderFactory,
@@ -22,6 +22,7 @@ import org.apache.spark.util.SerializableConfiguration
 
 class LogFileScan(
     options: CaseInsensitiveStringMap,
+    dataSchema: StructType,
     pushedFilters: Array[Filter]) extends Scan with Batch {
 
   private val logDir: String = {
@@ -40,7 +41,8 @@ class LogFileScan(
       .toMap
   }
 
-  override def readSchema(): StructType = LogFileTable.SCHEMA
+  override def readSchema(): StructType =
+    new StructType(dataSchema.fields ++ LogFileTable.PARTITION_SCHEMA.fields)
 
   override def description(): String = s"LogFileScan[$logDir, format=$fileFormat]"
 
@@ -96,17 +98,17 @@ class LogFileScan(
           case "json" =>
             JsonLogFilePartitionReaderFactory(
               sqlConf, broadcastedConf,
-              LogFileTable.DATA_SCHEMA, LogFileTable.DATA_SCHEMA,
+              dataSchema, dataSchema,
               LogFileTable.PARTITION_SCHEMA, params)
           case "csv" =>
             CsvLogFilePartitionReaderFactory(
               sqlConf, broadcastedConf,
-              LogFileTable.DATA_SCHEMA, LogFileTable.DATA_SCHEMA,
+              dataSchema, dataSchema,
               LogFileTable.PARTITION_SCHEMA, params)
           case _ =>
             TextLogFilePartitionReaderFactory(
               sqlConf, broadcastedConf,
-              LogFileTable.DATA_SCHEMA, LogFileTable.PARTITION_SCHEMA, params)
+              dataSchema, LogFileTable.PARTITION_SCHEMA, params)
         }
     }
   }
@@ -117,7 +119,7 @@ class LogFileScan(
    */
   private def collectDirectoryPartitions(
       fs: FileSystem,
-      dirEntry: FileStatus,
+      dirEntry: org.apache.hadoop.fs.FileStatus,
       dt: String,
       hour: String,
       partitions: ArrayBuffer[InputPartition]): Unit = {

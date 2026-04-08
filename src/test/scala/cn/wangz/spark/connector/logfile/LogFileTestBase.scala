@@ -25,18 +25,28 @@ trait LogFileTestBase extends AnyFunSuite with BeforeAndAfterAll {
     new File(url.toURI).getAbsolutePath
   }
 
-  protected def withCatalog(catalogName: String, logDir: String, format: String)
+  protected def withCatalog(
+      catalogName: String,
+      logDir: String,
+      format: String,
+      extraOptions: Map[String, String] = Map.empty)
       (body: => Unit): Unit = {
     spark.conf.set(s"spark.sql.catalog.$catalogName",
       classOf[LogFileCatalog].getName)
     spark.conf.set(s"spark.sql.catalog.$catalogName.logDir", logDir)
     spark.conf.set(s"spark.sql.catalog.$catalogName.fileFormat", format)
+    extraOptions.foreach { case (k, v) =>
+      spark.conf.set(s"spark.sql.catalog.$catalogName.$k", v)
+    }
     try {
       body
     } finally {
       spark.conf.unset(s"spark.sql.catalog.$catalogName")
       spark.conf.unset(s"spark.sql.catalog.$catalogName.logDir")
       spark.conf.unset(s"spark.sql.catalog.$catalogName.fileFormat")
+      extraOptions.keys.foreach { k =>
+        spark.conf.unset(s"spark.sql.catalog.$catalogName.$k")
+      }
     }
   }
 }

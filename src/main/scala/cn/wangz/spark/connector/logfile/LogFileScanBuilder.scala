@@ -2,14 +2,15 @@ package cn.wangz.spark.connector.logfile
 
 import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownFilters}
 import org.apache.spark.sql.sources._
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-class LogFileScanBuilder(options: CaseInsensitiveStringMap)
+class LogFileScanBuilder(options: CaseInsensitiveStringMap, dataSchema: StructType)
     extends ScanBuilder with SupportsPushDownFilters {
 
   private var _pushedFilters: Array[Filter] = Array.empty
 
-  override def build(): Scan = new LogFileScan(options, _pushedFilters)
+  override def build(): Scan = new LogFileScan(options, dataSchema, _pushedFilters)
 
   override def pushFilters(filters: Array[Filter]): Array[Filter] = {
     val (pushed, remaining) = filters.partition(isPartitionFilter)
