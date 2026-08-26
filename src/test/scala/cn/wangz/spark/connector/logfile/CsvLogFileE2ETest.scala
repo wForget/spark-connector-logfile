@@ -38,6 +38,21 @@ class CsvLogFileE2ETest extends LogFileTestBase {
     }
   }
 
+  test("read csv log files with an explicit schema") {
+    val logDir = resourcePath("csv_infer_logs")
+    withCatalog("csv_explicit_schema_cat", logDir, "csv",
+      Map(
+        "schema" -> "name STRING, age INT, score DOUBLE",
+        "header" -> "true")) {
+      val df = spark.sql("SELECT * FROM csv_explicit_schema_cat.default.spark_log_file")
+
+      assert(df.columns.toSeq === Seq("name", "age", "score", "dt", "hour", "app_id"))
+      val alice = df.filter("name = 'Alice'").select("age", "score").head()
+      assert(alice.getInt(0) === 30)
+      assert(alice.getDouble(1) === 95.5)
+    }
+  }
+
   test("inferSchema=false uses default value-only schema for csv") {
     val logDir = resourcePath("csv_infer_logs")
     withCatalog("csv_noinfer_cat", logDir, "csv") {

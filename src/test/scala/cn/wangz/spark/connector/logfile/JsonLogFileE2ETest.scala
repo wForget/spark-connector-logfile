@@ -112,6 +112,33 @@ class JsonLogFileE2ETest extends LogFileTestBase {
     }
   }
 
+  test("use an explicit json schema instead of inferred fields") {
+    val logDir = resourcePath("json_extra_logs")
+    withCatalog("json_explicit_schema_cat", logDir, "json",
+      Map(
+        "schema" -> "value STRING, level STRING",
+        "inferSchema" -> "true")) {
+      val df = spark.sql("SELECT * FROM json_explicit_schema_cat.default.spark_log_file")
+
+      assert(df.columns.toSeq === Seq("value", "level", "dt", "hour", "app_id"))
+      assert(!df.columns.contains("ts"))
+      val levels = df.select("level").collect().map(_.getString(0)).toSet
+      assert(levels === Set("INFO", "ERROR"))
+    }
+  }
+
+  test("reject an explicit schema that conflicts with partition columns") {
+    val logDir = resourcePath("json_logs")
+    withCatalog("json_explicit_collision_cat", logDir, "json",
+      Map("schema" -> "value STRING, app_id STRING")) {
+      val error = intercept[IllegalArgumentException] {
+        spark.sql("SELECT * FROM json_explicit_collision_cat.default.spark_log_file")
+      }
+      assert(error.getMessage.contains("reserved partition columns"))
+      assert(error.getMessage.contains("app_id"))
+    }
+  }
+
   test("infer json schema from at most 100 files") {
     val root = Files.createTempDirectory("json-schema-sample-")
     root.toFile.deleteOnExit()

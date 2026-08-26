@@ -9,7 +9,7 @@
 - 识别 Spark 滚动事件日志目录 `eventlog_v2_<app_id>`
 - 根据每个日志文件的修改时间生成 `dt` 和 `hour` 分区列
 - 对 `dt`、`hour`、`app_id` 下推过滤条件，在读取前裁剪文件
-- JSON/CSV 可选 schema 推断；默认只读取 `value` 字段
+- JSON/CSV 支持显式 schema 和可选 schema 推断；默认只读取 `value` 字段
 - 透传 Spark 文件格式读取参数及 `hadoop.*` 配置
 - 兼容 Spark 3.5 / Scala 2.12 和 Spark 4.2 / Scala 2.13
 
@@ -102,6 +102,7 @@ spark.sql.catalog.<catalog_name>.<option>
 | --- | --- | --- |
 | `logDir` | 无 | 日志根目录，必填；支持 Hadoop `Path` 可识别的 URI |
 | `fileFormat` | `json` | 日志格式：`json`、`csv`、`text` 或 `tfile`，大小写不敏感 |
+| `schema` | 无 | JSON/CSV 数据列的 DDL schema；配置后优先于 `inferSchema` |
 | `inferSchema` | `false` | 是否为 JSON/CSV 推断 schema；其他格式忽略该参数 |
 | `tableName` | `spark_log_file` | Catalog 暴露的表名 |
 | `partitionTimeZone` | `spark.sql.session.timeZone` | 将文件修改时间转换为 `dt`、`hour` 时使用的时区 |
@@ -125,7 +126,7 @@ spark.read
   .table("logs.default.spark_log_file")
 ```
 
-`logDir`、`fileFormat` 和 `inferSchema` 决定表的位置或 schema，不能在单次读取时改成不同的值。
+`logDir`、`fileFormat`、`schema` 和 `inferSchema` 决定表的位置或 schema，不能在单次读取时改成不同的值。
 
 ## 表结构
 
@@ -138,7 +139,7 @@ spark.read
 | `hour` | `string` | 否 | 文件修改时间对应的小时，格式为 `HH` |
 | `app_id` | `string` | 否 | 根据日志根目录下的文件或目录名称提取 |
 
-启用 `inferSchema=true` 后，JSON/CSV 的数据列由 Spark 推断，并在末尾追加三个分区列。Schema 推断会从符合条件的日志文件中随机采样最多 100 个；正常查询仍会读取所有符合条件的日志文件。采样可能遗漏只存在于未抽中文件中的字段。源数据不能包含与 `dt`、`hour`、`app_id` 同名（大小写不敏感）的字段，否则连接器会拒绝加载表。
+配置 `schema` 后，JSON/CSV 数据列按 Spark DDL 解析，例如 ``Event STRING, `Job ID` LONG``。未配置 `schema` 且启用 `inferSchema=true` 时，数据列由 Spark 推断。推断会从符合条件的日志文件中随机采样最多 100 个；正常查询仍会读取所有符合条件的日志文件。采样可能遗漏只存在于未抽中文件中的字段。显式或推断的数据 schema 都不能包含与 `dt`、`hour`、`app_id` 同名（大小写不敏感）的字段，否则连接器会拒绝加载表。
 
 ## 日志目录规则
 

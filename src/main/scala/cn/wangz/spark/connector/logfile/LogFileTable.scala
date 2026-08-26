@@ -18,17 +18,27 @@ class LogFileTable(options: CaseInsensitiveStringMap) extends Table with Support
     options.getOrDefault("fileFormat", "json"))
 
   private lazy val dataSchema: StructType = {
+    val explicitSchema = Option(options.get("schema"))
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map { ddl =>
+        require(fileFormat == "json" || fileFormat == "csv",
+          s"Explicit schema is only supported for json and csv, not '$fileFormat'")
+        StructType.fromDDL(ddl)
+      }
     val shouldInfer = java.lang.Boolean.parseBoolean(
       options.getOrDefault("inferSchema", "false"))
 
-    if (shouldInfer && (fileFormat == "json" || fileFormat == "csv")) {
-      val inferredSchema =
-        LogFileSchemaInference.infer(options, fileFormat).getOrElse(LogFileTable.DATA_SCHEMA)
-      LogFileTable.validateNoPartitionColumnConflicts(inferredSchema)
-      inferredSchema
-    } else {
-      LogFileTable.DATA_SCHEMA
-    }
+    val resolvedSchema = explicitSchema.orElse {
+      if (shouldInfer && (fileFormat == "json" || fileFormat == "csv")) {
+        LogFileSchemaInference.infer(options, fileFormat)
+      } else {
+        None
+      }
+    }.getOrElse(LogFileTable.DATA_SCHEMA)
+
+    LogFileTable.validateNoPartitionColumnConflicts(resolvedSchema)
+    resolvedSchema
   }
 
   override def name(): String = "LogFileTable"
@@ -101,7 +111,14 @@ object LogFileTable {
       normalizeFileFormat)
     rejectIfChanged("inferSchema", catalogOptions.getOrDefault("inferSchema", "false"),
       value => java.lang.Boolean.parseBoolean(value).toString)
+    rejectIfChanged("schema", Option(catalogOptions.get("schema")).getOrElse(""),
+      normalizeSchemaOption)
   }
+
+  private def normalizeSchemaOption(value: String): String =
+    Option(value).map(_.trim).filter(_.nonEmpty)
+      .map(StructType.fromDDL(_).json)
+      .getOrElse("")
 
   private[logfile] def validateNoPartitionColumnConflicts(dataSchema: StructType): Unit = {
     val conflicts = dataSchema.fieldNames
@@ -109,7 +126,7 @@ object LogFileTable {
       .distinct
       .sorted
     require(conflicts.isEmpty,
-      s"Inferred data schema contains reserved partition columns: ${conflicts.mkString(", ")}. " +
+      s"Data schema contains reserved partition columns: ${conflicts.mkString(", ")}. " +
         s"Reserved columns are: ${PARTITION_COLUMNS.toSeq.sorted.mkString(", ")}")
   }
 }

@@ -87,4 +87,34 @@ class LogFileCatalogTest extends AnyFunSuite {
     scanOptions.put("INFERSCHEMA", "FALSE")
     assert(table.newScanBuilder(new CaseInsensitiveStringMap(scanOptions)) != null)
   }
+
+  test("allow an equivalent scan schema and reject a schema change") {
+    val catalogOptions = new util.HashMap[String, String]()
+    catalogOptions.put("logDir", "/catalog/logs")
+    catalogOptions.put("fileFormat", "json")
+    catalogOptions.put("schema", "value STRING, level STRING")
+    val table = new LogFileTable(new CaseInsensitiveStringMap(catalogOptions))
+
+    val equivalent = new util.HashMap[String, String]()
+    equivalent.put("SCHEMA", "`value` STRING, `level` STRING")
+    assert(table.newScanBuilder(new CaseInsensitiveStringMap(equivalent)) != null)
+
+    val changed = new util.HashMap[String, String]()
+    changed.put("schema", "value STRING, level INT")
+    val error = intercept[IllegalArgumentException] {
+      table.newScanBuilder(new CaseInsensitiveStringMap(changed))
+    }
+    assert(error.getMessage.contains("Scan option 'schema' cannot override"))
+  }
+
+  test("reject an explicit schema for value-only file formats") {
+    val catalogOptions = new util.HashMap[String, String]()
+    catalogOptions.put("logDir", "/catalog/logs")
+    catalogOptions.put("fileFormat", "text")
+    catalogOptions.put("schema", "value STRING")
+    val table = new LogFileTable(new CaseInsensitiveStringMap(catalogOptions))
+
+    val error = intercept[IllegalArgumentException](table.schema())
+    assert(error.getMessage.contains("only supported for json and csv"))
+  }
 }
