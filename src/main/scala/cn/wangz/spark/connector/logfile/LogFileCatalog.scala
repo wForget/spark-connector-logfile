@@ -23,7 +23,7 @@ class LogFileCatalog extends CatalogPlugin with TableCatalog {
   override def name(): String = catalogName
 
   override def listTables(namespace: Array[String]): Array[Identifier] = {
-    if (namespace.isEmpty || (namespace.length == 1 && namespace(0) == "default")) {
+    if (isSupportedNamespace(namespace)) {
       Array(Identifier.of(namespace, tableName))
     } else {
       throw new NoSuchNamespaceException(namespace)
@@ -31,7 +31,7 @@ class LogFileCatalog extends CatalogPlugin with TableCatalog {
   }
 
   override def loadTable(ident: Identifier): Table = {
-    if (tableName.equalsIgnoreCase(ident.name())) {
+    if (isSupportedNamespace(ident.namespace()) && tableName.equalsIgnoreCase(ident.name())) {
       new LogFileTable(options)
     } else {
       throw new NoSuchTableException(ident)
@@ -53,6 +53,10 @@ class LogFileCatalog extends CatalogPlugin with TableCatalog {
 
   override def renameTable(oldIdent: Identifier, newIdent: Identifier): Unit =
     throw new UnsupportedOperationException("LogFileCatalog is read-only")
+
+  private def isSupportedNamespace(namespace: Array[String]): Boolean =
+    namespace.isEmpty ||
+      (namespace.length == 1 && namespace(0).equalsIgnoreCase("default"))
 }
 
 object LogFileCatalog {
