@@ -4,6 +4,7 @@ import java.util
 
 import org.apache.spark.sql.catalyst.analysis.{NoSuchNamespaceException, NoSuchTableException}
 import org.apache.spark.sql.connector.catalog.Identifier
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -116,5 +117,22 @@ class LogFileCatalogTest extends AnyFunSuite {
 
     val error = intercept[IllegalArgumentException](table.schema())
     assert(error.getMessage.contains("only supported for json and csv"))
+  }
+
+  test("validate partition identifier field names and arity") {
+    val options = new util.HashMap[String, String]()
+    options.put("logDir", "/does-not-exist")
+    options.put("fileFormat", "text")
+    val table = new LogFileTable(new CaseInsensitiveStringMap(options))
+
+    intercept[IllegalArgumentException] {
+      table.listPartitionIdentifiers(Array("dt"), InternalRow.empty)
+    }
+    intercept[IllegalArgumentException] {
+      table.listPartitionIdentifiers(Array("unknown"), InternalRow("value"))
+    }
+    intercept[IllegalArgumentException] {
+      table.listPartitionIdentifiers(Array("dt", "DT"), InternalRow("a", "b"))
+    }
   }
 }

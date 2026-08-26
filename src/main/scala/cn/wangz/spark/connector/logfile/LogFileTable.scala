@@ -6,13 +6,18 @@ import java.util.Locale
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
-import org.apache.spark.sql.connector.catalog.{SupportsRead, Table, TableCapability}
+import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.connector.catalog.{SupportsPartitionManagement, SupportsRead, Table, TableCapability}
+import org.apache.spark.sql.connector.expressions.{Expressions, Transform}
 import org.apache.spark.sql.connector.logfile.LogFileSchemaInference
 import org.apache.spark.sql.connector.read.ScanBuilder
 import org.apache.spark.sql.types.{DataTypes, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.unsafe.types.UTF8String
 
-class LogFileTable(options: CaseInsensitiveStringMap) extends Table with SupportsRead {
+class LogFileTable(options: CaseInsensitiveStringMap)
+    extends Table with SupportsRead with SupportsPartitionManagement {
 
   private val fileFormat: String = LogFileTable.normalizeFileFormat(
     options.getOrDefault("fileFormat", "json"))
@@ -49,17 +54,100 @@ class LogFileTable(options: CaseInsensitiveStringMap) extends Table with Support
   override def capabilities(): util.Set[TableCapability] =
     util.Collections.singleton(TableCapability.BATCH_READ)
 
+  override def partitionSchema(): StructType = LogFileTable.PARTITION_SCHEMA
+
+  override def partitioning(): Array[Transform] =
+    LogFileTable.PARTITION_COLUMN_NAMES.map(Expressions.identity).toArray
+
   override def newScanBuilder(scanOptions: CaseInsensitiveStringMap): ScanBuilder = {
     LogFileTable.validateTableLevelScanOptions(options, scanOptions)
     val mergedOptions = LogFileTable.mergeOptions(options, scanOptions)
     new LogFileScanBuilder(mergedOptions, dataSchema, fileFormat)
+  }
+
+  override def createPartition(
+      ident: InternalRow,
+      properties: util.Map[String, String]): Unit =
+    throw new UnsupportedOperationException("LogFileTable is read-only")
+
+  override def dropPartition(ident: InternalRow): Boolean =
+    throw new UnsupportedOperationException("LogFileTable is read-only")
+
+  override def replacePartitionMetadata(
+      ident: InternalRow,
+      properties: util.Map[String, String]): Unit =
+    throw new UnsupportedOperationException("LogFileTable is read-only")
+
+  override def loadPartitionMetadata(ident: InternalRow): util.Map[String, String] =
+    throw new UnsupportedOperationException("LogFileTable is read-only")
+
+  override def listPartitionIdentifiers(
+      names: Array[String],
+      ident: InternalRow): Array[InternalRow] = {
+    require(names != null, "Partition field names are required")
+    require(ident != null, "Partition identifier is required")
+    require(names.length == ident.numFields,
+      s"Partition field count ${names.length} does not match value count ${ident.numFields}")
+
+    val normalizedNames = names.map { name =>
+      require(name != null, "Partition field name cannot be null")
+      name.toLowerCase(Locale.ROOT)
+    }
+    require(normalizedNames.distinct.length == normalizedNames.length,
+      s"Duplicate partition fields: ${names.mkString(", ")}")
+    normalizedNames.foreach { name =>
+      require(LogFileTable.PARTITION_COLUMNS.contains(name),
+        s"Unknown partition field '$name'. Expected: " +
+          LogFileTable.PARTITION_COLUMN_NAMES.mkString(", "))
+    }
+
+    val requestedValues = normalizedNames.indices.map { index =>
+      normalizedNames(index) ->
+        (if (ident.isNullAt(index)) None else Some(ident.getString(index)))
+    }
+
+    listPartitionValues()
+      .filter { case (dt, hour, appId) =>
+        val partitionValues = Map("dt" -> dt, "hour" -> hour, "app_id" -> appId)
+        requestedValues.forall {
+          case (_, None) => false
+          case (name, Some(value)) => partitionValues(name) == value
+        }
+      }
+      .map { case (dt, hour, appId) =>
+        InternalRow(
+          UTF8String.fromString(dt),
+          UTF8String.fromString(hour),
+          UTF8String.fromString(appId))
+      }
+      .toArray
+  }
+
+  private def listPartitionValues(): Seq[(String, String, String)] = {
+    val logDir = options.get("logDir")
+    require(logDir != null && logDir.nonEmpty,
+      "logDir is required. Set spark.sql.catalog.<name>.logDir")
+    val root = new Path(logDir)
+    val hadoopConf = LogFileScan.buildHadoopConf(options)
+    val fs = root.getFileSystem(hadoopConf)
+    val timeZone = LogFileScan.resolvePartitionTimeZone(options)
+    if (!fs.exists(root)) {
+      Seq.empty
+    } else {
+      LogFileScan.listLogFiles(fs, root).map { case (file, appId) =>
+        val (dt, hour) = LogFileScan.partitionTime(file, timeZone)
+        (dt, hour, appId)
+      }.distinct.sorted
+    }
   }
 }
 
 object LogFileTable {
   val SUPPORTED_FILE_FORMATS: Seq[String] = Seq("csv", "json", "text", "tfile")
 
-  val PARTITION_COLUMNS: Set[String] = Set("dt", "hour", "app_id")
+  val PARTITION_COLUMN_NAMES: Seq[String] = Seq("dt", "hour", "app_id")
+
+  val PARTITION_COLUMNS: Set[String] = PARTITION_COLUMN_NAMES.toSet
 
   val DATA_SCHEMA: StructType = new StructType()
     .add("value", DataTypes.StringType, nullable = true)

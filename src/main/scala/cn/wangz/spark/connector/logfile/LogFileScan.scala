@@ -37,24 +37,7 @@ class LogFileScan(
     dir
   }
 
-  private val hadoopOptions: Map[String, String] = {
-    options.asCaseSensitiveMap().asScala
-      .filter { case (k, _) => k.toLowerCase(Locale.ROOT).startsWith("hadoop.") }
-      .map { case (k, v) => k.substring("hadoop.".length) -> v }
-      .toMap
-  }
-
-  private val partitionTimeZone: ZoneId = {
-    val sessionTimeZone = SQLConf.get.sessionLocalTimeZone
-    val configuredTimeZone = options.getOrDefault("partitionTimeZone", sessionTimeZone)
-    try {
-      DateTimeUtils.getZoneId(configuredTimeZone)
-    } catch {
-      case error: DateTimeException =>
-        throw new IllegalArgumentException(
-          s"Invalid partitionTimeZone '$configuredTimeZone'", error)
-    }
-  }
+  private val partitionTimeZone: ZoneId = LogFileScan.resolvePartitionTimeZone(options)
 
   override def readSchema(): StructType =
     new StructType(dataSchema.fields ++ LogFileTable.PARTITION_SCHEMA.fields)
@@ -122,22 +105,11 @@ class LogFileScan(
       file: FileStatus,
       appId: String,
       partitions: ArrayBuffer[InputPartition]): Unit = {
-    val modifiedAt = Instant.ofEpochMilli(file.getModificationTime).atZone(partitionTimeZone)
-    val dt = DateTimeFormatter.ISO_LOCAL_DATE.format(modifiedAt)
-    val hour = LogFileScan.HourFormatter.format(modifiedAt)
+    val (dt, hour) = LogFileScan.partitionTime(file, partitionTimeZone)
     partitions += LogFilePartition(file.getPath.toString, appId, dt, hour, file.getLen)
   }
 
-  private def buildHadoopConf(): Configuration = {
-    val base = try {
-      SparkSession.active.sparkContext.hadoopConfiguration
-    } catch {
-      case _: Exception => new Configuration()
-    }
-    val conf = new Configuration(base)
-    hadoopOptions.foreach { case (k, v) => conf.set(k, v) }
-    conf
-  }
+  private def buildHadoopConf(): Configuration = LogFileScan.buildHadoopConf(options)
 }
 
 object LogFileScan {
@@ -150,6 +122,37 @@ object LogFileScan {
   def isCompletedLogPath(path: Path): Boolean = {
     val name = path.getName
     !name.startsWith(".") && !name.startsWith("_") && !name.endsWith(".inprogress")
+  }
+
+  private[logfile] def buildHadoopConf(options: CaseInsensitiveStringMap): Configuration = {
+    val base = try {
+      SparkSession.active.sparkContext.hadoopConfiguration
+    } catch {
+      case _: Exception => new Configuration()
+    }
+    val conf = new Configuration(base)
+    options.asCaseSensitiveMap().asScala
+      .filter { case (key, _) => key.toLowerCase(Locale.ROOT).startsWith("hadoop.") }
+      .foreach { case (key, value) => conf.set(key.substring("hadoop.".length), value) }
+    conf
+  }
+
+  private[logfile] def resolvePartitionTimeZone(
+      options: CaseInsensitiveStringMap): ZoneId = {
+    val sessionTimeZone = SQLConf.get.sessionLocalTimeZone
+    val configuredTimeZone = options.getOrDefault("partitionTimeZone", sessionTimeZone)
+    try {
+      DateTimeUtils.getZoneId(configuredTimeZone)
+    } catch {
+      case error: DateTimeException =>
+        throw new IllegalArgumentException(
+          s"Invalid partitionTimeZone '$configuredTimeZone'", error)
+    }
+  }
+
+  private[logfile] def partitionTime(file: FileStatus, timeZone: ZoneId): (String, String) = {
+    val modifiedAt = Instant.ofEpochMilli(file.getModificationTime).atZone(timeZone)
+    DateTimeFormatter.ISO_LOCAL_DATE.format(modifiedAt) -> HourFormatter.format(modifiedAt)
   }
 
   /**

@@ -9,6 +9,7 @@
 - 识别 Spark 滚动事件日志目录 `eventlog_v2_<app_id>`
 - 根据每个日志文件的修改时间生成 `dt` 和 `hour` 分区列
 - 对 `dt`、`hour`、`app_id` 下推过滤条件，在读取前裁剪文件
+- 支持通过 `SHOW PARTITIONS` 查看和筛选逻辑分区
 - JSON/CSV 支持显式 schema 和可选 schema 推断；默认只读取 `value` 字段
 - 透传 Spark 文件格式读取参数及 `hadoop.*` 配置
 - 兼容 Spark 3.5 / Scala 2.12 和 Spark 4.2 / Scala 2.13
@@ -89,6 +90,15 @@ logs.default.spark_log_file
 ```
 
 可通过 `tableName` 参数修改表名。
+
+可以查看全部或部分匹配的逻辑分区：
+
+```sql
+SHOW PARTITIONS logs.default.spark_log_file;
+SHOW PARTITIONS logs.default.spark_log_file PARTITION (dt = '2026-08-26');
+```
+
+同一应用在同一小时内的多个日志文件会合并显示为一个 `dt/hour/app_id` 分区。
 
 ## 配置项
 
