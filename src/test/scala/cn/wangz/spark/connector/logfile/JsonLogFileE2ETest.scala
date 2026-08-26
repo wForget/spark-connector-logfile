@@ -102,4 +102,16 @@ class JsonLogFileE2ETest extends LogFileTestBase {
       assert(values === Set("event A", "event B"))
     }
   }
+
+  test("reject inferred data schema that conflicts with partition columns") {
+    val logDir = resourcePath("json_collision_logs")
+    withCatalog("json_collision_cat", logDir, "json",
+      Map("inferSchema" -> "true")) {
+      val error = intercept[IllegalArgumentException] {
+        spark.sql("SELECT * FROM json_collision_cat.default.spark_log_file")
+      }
+      assert(error.getMessage.contains("app_id, dt, hour"))
+      assert(error.getMessage.contains("reserved partition columns"))
+    }
+  }
 }
