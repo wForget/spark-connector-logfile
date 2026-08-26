@@ -3,6 +3,9 @@ package cn.wangz.spark.connector.logfile
 import java.util
 import java.util.Locale
 
+import scala.collection.JavaConverters._
+import scala.collection.mutable
+
 import org.apache.spark.sql.connector.catalog.{SupportsRead, Table, TableCapability}
 import org.apache.spark.sql.connector.logfile.LogFileSchemaInference
 import org.apache.spark.sql.connector.read.ScanBuilder
@@ -36,8 +39,11 @@ class LogFileTable(options: CaseInsensitiveStringMap) extends Table with Support
   override def capabilities(): util.Set[TableCapability] =
     util.Collections.singleton(TableCapability.BATCH_READ)
 
-  override def newScanBuilder(scanOptions: CaseInsensitiveStringMap): ScanBuilder =
-    new LogFileScanBuilder(options, dataSchema, fileFormat)
+  override def newScanBuilder(scanOptions: CaseInsensitiveStringMap): ScanBuilder = {
+    LogFileTable.validateTableLevelScanOptions(options, scanOptions)
+    val mergedOptions = LogFileTable.mergeOptions(options, scanOptions)
+    new LogFileScanBuilder(mergedOptions, dataSchema, fileFormat)
+  }
 }
 
 object LogFileTable {
@@ -61,6 +67,40 @@ object LogFileTable {
       s"Unsupported fileFormat '$fileFormat'. " +
         s"Supported formats: ${SUPPORTED_FILE_FORMATS.mkString(", ")}")
     normalized
+  }
+
+  private[logfile] def mergeOptions(
+      base: CaseInsensitiveStringMap,
+      overrides: CaseInsensitiveStringMap): CaseInsensitiveStringMap = {
+    val merged = mutable.LinkedHashMap.empty[String, (String, String)]
+
+    def addOptions(source: CaseInsensitiveStringMap): Unit = {
+      source.asCaseSensitiveMap().asScala.foreach { case (key, value) =>
+        merged.update(key.toLowerCase(Locale.ROOT), key -> value)
+      }
+    }
+
+    addOptions(base)
+    addOptions(overrides)
+    new CaseInsensitiveStringMap(merged.values.toMap.asJava)
+  }
+
+  private[logfile] def validateTableLevelScanOptions(
+      catalogOptions: CaseInsensitiveStringMap,
+      scanOptions: CaseInsensitiveStringMap): Unit = {
+    def rejectIfChanged(key: String, catalogValue: String, normalize: String => String): Unit = {
+      Option(scanOptions.get(key)).foreach { scanValue =>
+        require(normalize(scanValue) == normalize(catalogValue),
+          s"Scan option '$key' cannot override catalog value '$catalogValue' " +
+            s"with '$scanValue' because it defines the table schema or location")
+      }
+    }
+
+    rejectIfChanged("logDir", catalogOptions.get("logDir"), Option(_).getOrElse(""))
+    rejectIfChanged("fileFormat", catalogOptions.getOrDefault("fileFormat", "json"),
+      normalizeFileFormat)
+    rejectIfChanged("inferSchema", catalogOptions.getOrDefault("inferSchema", "false"),
+      value => java.lang.Boolean.parseBoolean(value).toString)
   }
 
   private[logfile] def validateNoPartitionColumnConflicts(dataSchema: StructType): Unit = {

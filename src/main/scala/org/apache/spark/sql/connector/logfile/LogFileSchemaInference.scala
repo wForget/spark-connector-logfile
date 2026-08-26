@@ -3,6 +3,8 @@ package org.apache.spark.sql.connector.logfile
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 
+import java.util.Locale
+
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
 import org.apache.spark.sql.SparkSession
@@ -25,8 +27,8 @@ object LogFileSchemaInference {
 
     val hadoopConf = new Configuration(spark.sparkContext.hadoopConfiguration)
     options.asCaseSensitiveMap().asScala
-      .filter(_._1.startsWith("hadoop."))
-      .foreach { case (k, v) => hadoopConf.set(k.stripPrefix("hadoop."), v) }
+      .filter { case (k, _) => k.toLowerCase(Locale.ROOT).startsWith("hadoop.") }
+      .foreach { case (k, v) => hadoopConf.set(k.substring("hadoop.".length), v) }
 
     val logDirPath = new Path(logDir)
     val fs = logDirPath.getFileSystem(hadoopConf)

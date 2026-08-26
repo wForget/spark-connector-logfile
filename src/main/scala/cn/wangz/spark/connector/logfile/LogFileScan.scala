@@ -1,7 +1,7 @@
 package cn.wangz.spark.connector.logfile
 
 import java.text.SimpleDateFormat
-import java.util.Date
+import java.util.{Date, Locale}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
@@ -36,8 +36,8 @@ class LogFileScan(
 
   private val hadoopOptions: Map[String, String] = {
     options.asCaseSensitiveMap().asScala
-      .filter(_._1.startsWith("hadoop."))
-      .map { case (k, v) => k.stripPrefix("hadoop.") -> v }
+      .filter { case (k, _) => k.toLowerCase(Locale.ROOT).startsWith("hadoop.") }
+      .map { case (k, v) => k.substring("hadoop.".length) -> v }
       .toMap
   }
 

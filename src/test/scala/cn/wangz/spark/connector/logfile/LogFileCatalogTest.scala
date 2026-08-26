@@ -52,4 +52,39 @@ class LogFileCatalogTest extends AnyFunSuite {
     assert(!catalog.tableExists(nestedNamespace))
     assert(!catalog.tableExists(wrongTable))
   }
+
+  test("reject scan options that redefine table schema or location") {
+    val catalogOptions = new util.HashMap[String, String]()
+    catalogOptions.put("logDir", "/catalog/logs")
+    catalogOptions.put("fileFormat", "text")
+    catalogOptions.put("inferSchema", "false")
+    val table = new LogFileTable(new CaseInsensitiveStringMap(catalogOptions))
+
+    Seq(
+      "logDir" -> "/scan/logs",
+      "fileFormat" -> "json",
+      "inferSchema" -> "true"
+    ).foreach { case (key, value) =>
+      val scanOptions = new util.HashMap[String, String]()
+      scanOptions.put(key, value)
+      val error = intercept[IllegalArgumentException] {
+        table.newScanBuilder(new CaseInsensitiveStringMap(scanOptions))
+      }
+      assert(error.getMessage.contains(s"Scan option '$key' cannot override"))
+    }
+  }
+
+  test("allow equivalent table-level scan options") {
+    val catalogOptions = new util.HashMap[String, String]()
+    catalogOptions.put("logDir", "/catalog/logs")
+    catalogOptions.put("fileFormat", "text")
+    catalogOptions.put("inferSchema", "false")
+    val table = new LogFileTable(new CaseInsensitiveStringMap(catalogOptions))
+
+    val scanOptions = new util.HashMap[String, String]()
+    scanOptions.put("LOGDIR", "/catalog/logs")
+    scanOptions.put("FILEFORMAT", "TEXT")
+    scanOptions.put("INFERSCHEMA", "FALSE")
+    assert(table.newScanBuilder(new CaseInsensitiveStringMap(scanOptions)) != null)
+  }
 }

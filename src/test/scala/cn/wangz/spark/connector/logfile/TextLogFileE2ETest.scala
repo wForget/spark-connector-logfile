@@ -36,6 +36,22 @@ class TextLogFileE2ETest extends LogFileTestBase {
     }
   }
 
+  test("apply case-insensitive scan options over catalog options") {
+    val logDir = resourcePath("text_logs")
+    withCatalog("text_scan_options_cat", logDir, "text",
+      Map("wholetext" -> "false")) {
+      val values = spark.read
+        .option("WhOlEtExT", "true")
+        .table("text_scan_options_cat.default.spark_log_file")
+        .filter("app_id = 'app_text_001'")
+        .select("value")
+        .collect().map(_.getString(0)).toSeq
+
+      assert(values === Seq(
+        "INFO Starting application\nWARN Low memory\nERROR OutOfMemoryError\n"))
+    }
+  }
+
   test("expose Spark input file metadata") {
     val logDir = resourcePath("text_logs")
     withCatalog("text_metadata_cat", logDir, "text") {
