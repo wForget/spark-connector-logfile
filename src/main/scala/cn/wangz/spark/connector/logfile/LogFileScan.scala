@@ -7,7 +7,7 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.connector.logfile.{
@@ -62,20 +62,12 @@ class LogFileScan(
     val partitions = new ArrayBuffer[InputPartition]()
 
     fs.listStatus(logDirPath).foreach { entry =>
-      val name = entry.getPath.getName
       if (LogFileScan.isCompletedLogPath(entry.getPath)) {
-        val modDate = new Date(entry.getModificationTime)
-        val dt = dateFmt.format(modDate)
-        val hour = hourFmt.format(modDate)
-
         if (entry.isFile) {
-          val appId = LogFileScan.extractAppId(name)
-          if (matchesFilters(dt, hour, appId)) {
-            partitions += LogFilePartition(
-              entry.getPath.toString, appId, dt, hour, entry.getLen)
-          }
+          addFilePartition(entry, LogFileScan.extractAppId(entry.getPath.getName),
+            dateFmt, hourFmt, partitions)
         } else if (entry.isDirectory) {
-          collectDirectoryPartitions(fs, entry, dt, hour, partitions)
+          collectDirectoryPartitions(fs, entry, dateFmt, hourFmt, partitions)
         }
       }
     }
@@ -124,9 +116,9 @@ class LogFileScan(
    */
   private def collectDirectoryPartitions(
       fs: FileSystem,
-      dirEntry: org.apache.hadoop.fs.FileStatus,
-      dt: String,
-      hour: String,
+      dirEntry: FileStatus,
+      dateFmt: SimpleDateFormat,
+      hourFmt: SimpleDateFormat,
       partitions: ArrayBuffer[InputPartition]): Unit = {
     val dirName = dirEntry.getPath.getName
     val isRollingDirectory = dirName.startsWith("eventlog_v2_")
@@ -136,8 +128,6 @@ class LogFileScan(
       dirName
     }
 
-    if (!matchesFilters(dt, hour, appId)) return
-
     val logFileFilter: Path => Boolean = { p =>
       LogFileScan.isCompletedLogPath(p) &&
         (!isRollingDirectory || p.getName.startsWith("events_"))
@@ -145,16 +135,28 @@ class LogFileScan(
 
     fs.listStatus(dirEntry.getPath, (p: Path) => logFileFilter(p)).foreach { child =>
       if (child.isFile) {
-        partitions += LogFilePartition(
-          child.getPath.toString, appId, dt, hour, child.getLen)
+        addFilePartition(child, appId, dateFmt, hourFmt, partitions)
       } else if (child.isDirectory) {
         fs.listStatus(child.getPath, (p: Path) => logFileFilter(p)).foreach { nf =>
           if (nf.isFile) {
-            partitions += LogFilePartition(
-              nf.getPath.toString, appId, dt, hour, nf.getLen)
+            addFilePartition(nf, appId, dateFmt, hourFmt, partitions)
           }
         }
       }
+    }
+  }
+
+  private def addFilePartition(
+      file: FileStatus,
+      appId: String,
+      dateFmt: SimpleDateFormat,
+      hourFmt: SimpleDateFormat,
+      partitions: ArrayBuffer[InputPartition]): Unit = {
+    val modDate = new Date(file.getModificationTime)
+    val dt = dateFmt.format(modDate)
+    val hour = hourFmt.format(modDate)
+    if (matchesFilters(dt, hour, appId)) {
+      partitions += LogFilePartition(file.getPath.toString, appId, dt, hour, file.getLen)
     }
   }
 
