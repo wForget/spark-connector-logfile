@@ -8,6 +8,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.connector.logfile.{
   CsvLogFilePartitionReaderFactory,
@@ -87,7 +88,11 @@ class LogFileScan(
     val format = fileFormat.toLowerCase
     format match {
       case "tfile" =>
-        new TFileLogFilePartitionReaderFactory(hadoopOptions)
+        val spark = SparkSession.active
+        val broadcastedConf: Broadcast[SerializableConfiguration] =
+          spark.sparkContext.broadcast(
+            new SerializableConfiguration(buildHadoopConf()))
+        new TFileLogFilePartitionReaderFactory(broadcastedConf)
       case _ =>
         val spark = SparkSession.active
         val sqlConf = spark.sessionState.conf
@@ -153,11 +158,12 @@ class LogFileScan(
   }
 
   private def buildHadoopConf(): Configuration = {
-    val conf = try {
+    val base = try {
       SparkSession.active.sparkContext.hadoopConfiguration
     } catch {
       case _: Exception => new Configuration()
     }
+    val conf = new Configuration(base)
     hadoopOptions.foreach { case (k, v) => conf.set(k, v) }
     conf
   }
