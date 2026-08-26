@@ -14,7 +14,6 @@
         <scala.version>2.12.18</scala.version>
         <scala.binary.version>2.12</scala.binary.version>
         <spark.version>3.5.7</spark.version>
-        <hadoop.version>3.3.4</hadoop.version>
     </properties>
 
     <dependencies>
@@ -28,12 +27,6 @@
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql_${scala.binary.version}</artifactId>
             <version>${spark.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-common</artifactId>
-            <version>${hadoop.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
