@@ -1,5 +1,8 @@
 package cn.wangz.spark.connector.logfile
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path}
+
 class JsonLogFileE2ETest extends LogFileTestBase {
 
   test("read json log files via catalog") {
@@ -144,5 +147,51 @@ class JsonLogFileE2ETest extends LogFileTestBase {
       assert(df.select("value").collect().map(_.getString(0)).toSet ===
         Set("complete event", "compacted event"))
     }
+  }
+
+  test("recursively discover completed plain and rolling log files") {
+    val root = Files.createTempDirectory("log-file-recursive-")
+    root.toFile.deleteOnExit()
+
+    val rollingDeep = Files.createDirectories(
+      root.resolve("eventlog_v2_app_recursive/segments/year/month"))
+    writeJson(rollingDeep.resolve("events_1"),
+      """{"value":"rolling deep","rolling_field":"kept"}""")
+    writeJson(rollingDeep.resolve("appstatus_1"),
+      """{"value":"rolling status","status_only":true}""")
+    writeJson(rollingDeep.resolve("events_2.inprogress"),
+      """{"value":"rolling inprogress","inprogress_only":true}""")
+
+    val pendingDeep = Files.createDirectories(
+      root.resolve("eventlog_v2_app_recursive/pending.inprogress/deeper"))
+    writeJson(pendingDeep.resolve("events_3"),
+      """{"value":"pending directory event","pending_directory_only":true}""")
+
+    val hiddenDeep = Files.createDirectories(
+      root.resolve("eventlog_v2_app_recursive/.hidden/deeper"))
+    writeJson(hiddenDeep.resolve("events_4"),
+      """{"value":"hidden event","hidden_only":true}""")
+
+    val plainDeep = Files.createDirectories(root.resolve("app_plain_recursive/a/b/c"))
+    writeJson(plainDeep.resolve("plain-log"),
+      """{"value":"plain deep","plain_field":7}""")
+
+    withCatalog("json_recursive_cat", root.toString, "json",
+      Map("inferSchema" -> "true")) {
+      val df = spark.sql("SELECT * FROM json_recursive_cat.default.spark_log_file")
+
+      assert(df.columns.toSet === Set(
+        "value", "rolling_field", "plain_field", "dt", "hour", "app_id"))
+      assert(df.select("value").collect().map(_.getString(0)).toSet ===
+        Set("rolling deep", "plain deep"))
+
+      val appIds = df.select("app_id").collect().map(_.getString(0)).toSet
+      assert(appIds === Set("app_recursive", "app_plain_recursive"))
+    }
+  }
+
+  private def writeJson(path: Path, json: String): Unit = {
+    Files.write(path, (json + "\n").getBytes(StandardCharsets.UTF_8))
+      .toFile.deleteOnExit()
   }
 }

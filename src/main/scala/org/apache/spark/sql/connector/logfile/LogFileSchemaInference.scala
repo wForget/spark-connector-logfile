@@ -1,8 +1,6 @@
 package org.apache.spark.sql.connector.logfile
 
 import scala.collection.JavaConverters._
-import scala.collection.mutable.ArrayBuffer
-
 import java.util.Locale
 
 import org.apache.hadoop.conf.Configuration
@@ -57,39 +55,6 @@ object LogFileSchemaInference {
   }
 
   private def collectSampleFiles(fs: FileSystem, logDirPath: Path): Seq[FileStatus] = {
-    val files = new ArrayBuffer[FileStatus]()
-    fs.listStatus(logDirPath).foreach { entry =>
-      if (LogFileScan.isCompletedLogPath(entry.getPath)) {
-        if (entry.isFile) {
-          files += entry
-        } else if (entry.isDirectory) {
-          collectDirectoryFiles(fs, entry, files)
-        }
-      }
-    }
-    files
-  }
-
-  private def collectDirectoryFiles(
-      fs: FileSystem,
-      dirEntry: FileStatus,
-      files: ArrayBuffer[FileStatus]): Unit = {
-    val isRollingDirectory = dirEntry.getPath.getName.startsWith("eventlog_v2_")
-    val logFileFilter: Path => Boolean = { p =>
-      LogFileScan.isCompletedLogPath(p) &&
-        (!isRollingDirectory || p.getName.startsWith("events_"))
-    }
-
-    fs.listStatus(dirEntry.getPath, (p: Path) => logFileFilter(p)).foreach { child =>
-      if (child.isFile) {
-        files += child
-      } else if (child.isDirectory) {
-        fs.listStatus(child.getPath, (p: Path) => logFileFilter(p)).foreach { nf =>
-          if (nf.isFile) {
-            files += nf
-          }
-        }
-      }
-    }
+    LogFileScan.listLogFiles(fs, logDirPath).map(_._1)
   }
 }

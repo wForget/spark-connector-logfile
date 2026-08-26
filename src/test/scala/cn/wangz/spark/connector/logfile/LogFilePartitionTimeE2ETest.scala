@@ -19,7 +19,7 @@ class LogFilePartitionTimeE2ETest extends LogFileTestBase {
 
     val plainDir = Files.createDirectories(root.resolve("app_nested_time"))
     plainDir.toFile.deleteOnExit()
-    val nestedDir = Files.createDirectories(plainDir.resolve("nested"))
+    val nestedDir = Files.createDirectories(plainDir.resolve("one/two/three"))
     nestedDir.toFile.deleteOnExit()
     val nested = write(nestedDir.resolve("events_3"), "nested event")
 

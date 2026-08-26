@@ -5,7 +5,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 import scala.collection.JavaConverters._
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{ArrayBuffer, HashSet}
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
@@ -74,15 +74,8 @@ class LogFileScan(
 
     val partitions = new ArrayBuffer[InputPartition]()
 
-    fs.listStatus(logDirPath).foreach { entry =>
-      if (LogFileScan.isCompletedLogPath(entry.getPath)) {
-        if (entry.isFile) {
-          addFilePartition(entry, LogFileScan.extractAppId(entry.getPath.getName),
-            partitions)
-        } else if (entry.isDirectory) {
-          collectDirectoryPartitions(fs, entry, partitions)
-        }
-      }
+    LogFileScan.listLogFiles(fs, logDirPath).foreach { case (file, appId) =>
+      addFilePartition(file, appId, partitions)
     }
 
     partitions.toArray
@@ -121,40 +114,6 @@ class LogFileScan(
         }
       case unsupported =>
         throw new IllegalStateException(s"Unsupported normalized fileFormat: $unsupported")
-    }
-  }
-
-  /**
-   * V2 rolling structure: eventlog_v2_{appId}/{events_*, appstatus_*}
-   * Plain directory: {appId}/{log files}
-   */
-  private def collectDirectoryPartitions(
-      fs: FileSystem,
-      dirEntry: FileStatus,
-      partitions: ArrayBuffer[InputPartition]): Unit = {
-    val dirName = dirEntry.getPath.getName
-    val isRollingDirectory = dirName.startsWith("eventlog_v2_")
-    val appId = if (isRollingDirectory) {
-      dirName.stripPrefix("eventlog_v2_")
-    } else {
-      dirName
-    }
-
-    val logFileFilter: Path => Boolean = { p =>
-      LogFileScan.isCompletedLogPath(p) &&
-        (!isRollingDirectory || p.getName.startsWith("events_"))
-    }
-
-    fs.listStatus(dirEntry.getPath, (p: Path) => logFileFilter(p)).foreach { child =>
-      if (child.isFile) {
-        addFilePartition(child, appId, partitions)
-      } else if (child.isDirectory) {
-        fs.listStatus(child.getPath, (p: Path) => logFileFilter(p)).foreach { nf =>
-          if (nf.isFile) {
-            addFilePartition(nf, appId, partitions)
-          }
-        }
-      }
     }
   }
 
@@ -219,6 +178,63 @@ object LogFileScan {
   def isCompletedLogPath(path: Path): Boolean = {
     val name = path.getName
     !name.startsWith(".") && !name.startsWith("_") && !name.endsWith(".inprogress")
+  }
+
+  /**
+   * Lists completed log files below the configured root. The root entry determines app_id and
+   * whether Spark's rolling event-log naming rules apply to every descendant file.
+   */
+  def listLogFiles(fs: FileSystem, logDirPath: Path): Seq[(FileStatus, String)] = {
+    val discovered = new ArrayBuffer[(FileStatus, String)]()
+
+    fs.listStatus(logDirPath).foreach { entry =>
+      if (isCompletedLogPath(entry.getPath)) {
+        if (entry.isFile) {
+          discovered += entry -> extractAppId(entry.getPath.getName)
+        } else if (entry.isDirectory && !entry.isSymlink) {
+          val dirName = entry.getPath.getName
+          val isRollingDirectory = dirName.startsWith("eventlog_v2_")
+          val appId = if (isRollingDirectory) {
+            dirName.stripPrefix("eventlog_v2_")
+          } else {
+            dirName
+          }
+          collectDirectoryLogFiles(fs, entry.getPath, isRollingDirectory).foreach { file =>
+            discovered += file -> appId
+          }
+        }
+      }
+    }
+
+    discovered.sortBy { case (file, _) => file.getPath.toString }
+  }
+
+  private def collectDirectoryLogFiles(
+      fs: FileSystem,
+      root: Path,
+      isRollingDirectory: Boolean): Seq[FileStatus] = {
+    val pendingDirectories = ArrayBuffer(root)
+    val visitedDirectories = HashSet.empty[String]
+    val files = new ArrayBuffer[FileStatus]()
+
+    while (pendingDirectories.nonEmpty) {
+      val directory = pendingDirectories.remove(pendingDirectories.length - 1)
+      val qualifiedDirectory = fs.makeQualified(directory).toUri.normalize().toString
+      if (visitedDirectories.add(qualifiedDirectory)) {
+        fs.listStatus(directory).foreach { entry =>
+          if (isCompletedLogPath(entry.getPath)) {
+            if (entry.isDirectory && !entry.isSymlink) {
+              pendingDirectories += entry.getPath
+            } else if (entry.isFile &&
+                (!isRollingDirectory || entry.getPath.getName.startsWith("events_"))) {
+              files += entry
+            }
+          }
+        }
+      }
+    }
+
+    files.sortBy(_.getPath.toString)
   }
 
   def extractAppId(fileName: String): String = {
