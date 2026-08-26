@@ -206,7 +206,7 @@ object LogFileScan {
       }
     }
 
-    discovered.sortBy { case (file, _) => file.getPath.toString }
+    discovered.sortBy { case (file, _) => file.getPath.toString }.toSeq
   }
 
   private def collectDirectoryLogFiles(
@@ -234,7 +234,7 @@ object LogFileScan {
       }
     }
 
-    files.sortBy(_.getPath.toString)
+    files.sortBy(_.getPath.toString).toSeq
   }
 
   def extractAppId(fileName: String): String = {

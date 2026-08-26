@@ -1,7 +1,8 @@
 package org.apache.spark.sql.connector.logfile
 
-import scala.collection.JavaConverters._
 import java.util.Locale
+
+import scala.collection.JavaConverters._
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}

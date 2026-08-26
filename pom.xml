@@ -11,9 +11,6 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <scala.version>2.12.18</scala.version>
-        <scala.binary.version>2.12</scala.binary.version>
-        <spark.version>3.5.7</spark.version>
     </properties>
 
     <dependencies>
@@ -38,13 +35,15 @@
     </dependencies>
 
     <build>
+        <directory>${project.basedir}/target/${spark.profile}</directory>
+        <finalName>${project.artifactId}-${project.version}-${spark.profile}_${scala.binary.version}</finalName>
         <sourceDirectory>src/main/scala</sourceDirectory>
         <testSourceDirectory>src/test/scala</testSourceDirectory>
         <plugins>
             <plugin>
                 <groupId>net.alchim31.maven</groupId>
                 <artifactId>scala-maven-plugin</artifactId>
-                <version>4.8.1</version>
+                <version>4.9.10</version>
                 <executions>
                     <execution>
                         <goals>
@@ -56,7 +55,8 @@
                 <configuration>
                     <scalaVersion>${scala.version}</scalaVersion>
                     <args>
-                        <arg>-target:jvm-1.8</arg>
+                        <arg>-release</arg>
+                        <arg>${maven.compiler.release}</arg>
                         <arg>-deprecation</arg>
                         <arg>-feature</arg>
                     </args>
@@ -74,6 +74,33 @@
                 <groupId>org.scalatest</groupId>
                 <artifactId>scalatest-maven-plugin</artifactId>
                 <version>2.2.0</version>
+                <configuration>
+                    <argLine>
+                        -XX:+IgnoreUnrecognizedVMOptions
+                        --add-opens=java.base/java.lang=ALL-UNNAMED
+                        --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+                        --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+                        --add-opens=java.base/java.io=ALL-UNNAMED
+                        --add-opens=java.base/java.net=ALL-UNNAMED
+                        --add-opens=java.base/java.nio=ALL-UNNAMED
+                        --add-opens=java.base/java.util=ALL-UNNAMED
+                        --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+                        --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+                        --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED
+                        --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+                        --add-opens=java.base/sun.nio.cs=ALL-UNNAMED
+                        --add-opens=java.base/sun.security.action=ALL-UNNAMED
+                        --add-opens=java.base/sun.util.calendar=ALL-UNNAMED
+                        --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+                        -Djdk.reflect.useDirectMethodHandle=false
+                    </argLine>
+                    <systemProperties>
+                        <spark.test.profile>${spark.profile}</spark.test.profile>
+                        <spark.test.version>${spark.version}</spark.test.version>
+                        <scala.test.version>${scala.version}</scala.test.version>
+                        <java.test.release>${maven.compiler.release}</java.test.release>
+                    </systemProperties>
+                </configuration>
                 <executions>
                     <execution>
                         <id>test</id>
@@ -85,4 +112,30 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>spark-3.5</id>
+            <properties>
+                <spark.profile>spark-3.5</spark.profile>
+                <maven.compiler.release>8</maven.compiler.release>
+                <scala.version>2.12.18</scala.version>
+                <scala.binary.version>2.12</scala.binary.version>
+                <spark.version>3.5.7</spark.version>
+            </properties>
+        </profile>
+        <profile>
+            <id>spark-4.2</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <spark.profile>spark-4.2</spark.profile>
+                <maven.compiler.release>17</maven.compiler.release>
+                <scala.version>2.13.18</scala.version>
+                <scala.binary.version>2.13</scala.binary.version>
+                <spark.version>4.2.0</spark.version>
+            </properties>
+        </profile>
+    </profiles>
 </project>
