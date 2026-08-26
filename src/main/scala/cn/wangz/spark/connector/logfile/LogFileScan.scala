@@ -64,7 +64,7 @@ class LogFileScan(
 
     fs.listStatus(logDirPath).foreach { entry =>
       val name = entry.getPath.getName
-      if (!name.startsWith(".") && !name.startsWith("_") && !name.endsWith(".inprogress")) {
+      if (LogFileScan.isCompletedLogPath(entry.getPath)) {
         val modDate = new Date(entry.getModificationTime)
         val dt = dateFmt.format(modDate)
         val hour = hourFmt.format(modDate)
@@ -119,7 +119,7 @@ class LogFileScan(
   }
 
   /**
-   * V2 rolling structure: eventlog_v2_{appId}/{events_*, appstatus_*.compact}
+   * V2 rolling structure: eventlog_v2_{appId}/{events_*, appstatus_*}
    * Plain directory: {appId}/{log files}
    */
   private def collectDirectoryPartitions(
@@ -129,7 +129,8 @@ class LogFileScan(
       hour: String,
       partitions: ArrayBuffer[InputPartition]): Unit = {
     val dirName = dirEntry.getPath.getName
-    val appId = if (dirName.startsWith("eventlog_v2_")) {
+    val isRollingDirectory = dirName.startsWith("eventlog_v2_")
+    val appId = if (isRollingDirectory) {
       dirName.stripPrefix("eventlog_v2_")
     } else {
       dirName
@@ -138,8 +139,8 @@ class LogFileScan(
     if (!matchesFilters(dt, hour, appId)) return
 
     val logFileFilter: Path => Boolean = { p =>
-      val n = p.getName
-      !n.startsWith(".") && !n.startsWith("_") && !n.endsWith(".compact")
+      LogFileScan.isCompletedLogPath(p) &&
+        (!isRollingDirectory || p.getName.startsWith("events_"))
     }
 
     fs.listStatus(dirEntry.getPath, (p: Path) => logFileFilter(p)).foreach { child =>
@@ -201,6 +202,11 @@ class LogFileScan(
 
 object LogFileScan {
   private val CodecSuffixes = Seq(".lz4", ".snappy", ".zstd", ".lzf", ".gz", ".bz2")
+
+  def isCompletedLogPath(path: Path): Boolean = {
+    val name = path.getName
+    !name.startsWith(".") && !name.startsWith("_") && !name.endsWith(".inprogress")
+  }
 
   def extractAppId(fileName: String): String = {
     var name = fileName

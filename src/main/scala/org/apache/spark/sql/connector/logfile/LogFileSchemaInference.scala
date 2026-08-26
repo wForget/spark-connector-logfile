@@ -14,6 +14,8 @@ import org.apache.spark.sql.execution.datasources.json.JsonDataSource
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
+import cn.wangz.spark.connector.logfile.LogFileScan
+
 object LogFileSchemaInference {
 
   def infer(options: CaseInsensitiveStringMap, format: String): Option[StructType] = {
@@ -55,8 +57,7 @@ object LogFileSchemaInference {
   private def collectSampleFiles(fs: FileSystem, logDirPath: Path): Seq[FileStatus] = {
     val files = new ArrayBuffer[FileStatus]()
     fs.listStatus(logDirPath).foreach { entry =>
-      val name = entry.getPath.getName
-      if (!name.startsWith(".") && !name.startsWith("_") && !name.endsWith(".inprogress")) {
+      if (LogFileScan.isCompletedLogPath(entry.getPath)) {
         if (entry.isFile) {
           files += entry
         } else if (entry.isDirectory) {
@@ -71,9 +72,10 @@ object LogFileSchemaInference {
       fs: FileSystem,
       dirEntry: FileStatus,
       files: ArrayBuffer[FileStatus]): Unit = {
+    val isRollingDirectory = dirEntry.getPath.getName.startsWith("eventlog_v2_")
     val logFileFilter: Path => Boolean = { p =>
-      val n = p.getName
-      !n.startsWith(".") && !n.startsWith("_") && !n.endsWith(".compact")
+      LogFileScan.isCompletedLogPath(p) &&
+        (!isRollingDirectory || p.getName.startsWith("events_"))
     }
 
     fs.listStatus(dirEntry.getPath, (p: Path) => logFileFilter(p)).foreach { child =>

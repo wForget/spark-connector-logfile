@@ -114,4 +114,16 @@ class JsonLogFileE2ETest extends LogFileTestBase {
       assert(error.getMessage.contains("reserved partition columns"))
     }
   }
+
+  test("ignore nested inprogress files when inferring schema and reading") {
+    val logDir = resourcePath("inprogress_logs")
+    withCatalog("json_inprogress_cat", logDir, "json",
+      Map("inferSchema" -> "true")) {
+      val df = spark.sql("SELECT * FROM json_inprogress_cat.default.spark_log_file")
+
+      assert(df.columns.toSet === Set("value", "dt", "hour", "app_id"))
+      assert(df.select("value").collect().map(_.getString(0)).toSet ===
+        Set("complete event", "compacted event"))
+    }
+  }
 }
