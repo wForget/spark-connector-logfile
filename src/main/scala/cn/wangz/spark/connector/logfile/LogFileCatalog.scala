@@ -2,6 +2,9 @@ package cn.wangz.spark.connector.logfile
 
 import java.util
 
+import scala.collection.JavaConverters._
+
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.analysis.{NoSuchNamespaceException, NoSuchTableException}
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.expressions.Transform
@@ -32,7 +35,7 @@ class LogFileCatalog extends CatalogPlugin with TableCatalog {
 
   override def loadTable(ident: Identifier): Table = {
     if (isSupportedNamespace(ident.namespace()) && tableName.equalsIgnoreCase(ident.name())) {
-      new LogFileTable(options)
+      new LogFileTable(runtimeCatalogOptions())
     } else {
       throw new NoSuchTableException(ident)
     }
@@ -57,6 +60,33 @@ class LogFileCatalog extends CatalogPlugin with TableCatalog {
   private def isSupportedNamespace(namespace: Array[String]): Boolean =
     namespace.isEmpty ||
       (namespace.length == 1 && namespace(0).equalsIgnoreCase("default"))
+
+  private def runtimeCatalogOptions(): CaseInsensitiveStringMap = {
+    SparkSession.getActiveSession.map { spark =>
+      val prefix = s"spark.sql.catalog.$catalogName."
+      val initializedSchemas = options.asCaseSensitiveMap().asScala
+        .filter { case (key, _) => key.equalsIgnoreCase("schema") }
+        .toSet
+      val runtimeSchemas = spark.conf.getAll.collect {
+        case (key, value)
+            if key.startsWith(prefix) &&
+              key.substring(prefix.length).equalsIgnoreCase("schema") =>
+          key.substring(prefix.length) -> value
+      }.filterNot(initializedSchemas.contains).toSeq
+      val runtimeSchemaValues = runtimeSchemas.map(_._2).distinct
+      require(runtimeSchemaValues.size <= 1,
+        s"Conflicting runtime schema values for catalog '$catalogName': " +
+          runtimeSchemas.map { case (key, value) => s"$key=$value" }.sorted.mkString(", "))
+
+      runtimeSchemaValues.headOption.map { runtimeSchema =>
+        val currentOptions = new util.HashMap[String, String]()
+        currentOptions.put("schema", runtimeSchema)
+        LogFileTable.mergeOptions(
+          options,
+          new CaseInsensitiveStringMap(currentOptions))
+      }.getOrElse(options)
+    }.getOrElse(options)
+  }
 }
 
 object LogFileCatalog {

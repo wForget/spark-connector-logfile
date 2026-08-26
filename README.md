@@ -128,6 +128,14 @@ spark.read
 
 `logDir`、`fileFormat`、`schema` 和 `inferSchema` 决定表的位置或 schema，不能在单次读取时改成不同的值。
 
+可以在 Catalog 初始化后通过 `SET` 更新 `schema`，后续新建的查询或 DataFrame 会使用新 schema：
+
+```sql
+SET spark.sql.catalog.logs.schema=`Event` STRING, `Job ID` LONG;
+```
+
+已经完成分析的 DataFrame、临时视图或缓存表不会自动改变 schema。把运行时 `schema` 设置为空白字符串可回退到 `inferSchema` 或默认的 `value` schema；取消该运行时配置则恢复 Catalog 初始化时的配置值。
+
 ## 表结构
 
 默认结构如下：

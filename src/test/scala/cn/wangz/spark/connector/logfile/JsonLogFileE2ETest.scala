@@ -127,6 +127,35 @@ class JsonLogFileE2ETest extends LogFileTestBase {
     }
   }
 
+  test("apply runtime schema changes to newly analyzed tables") {
+    val logDir = resourcePath("json_extra_logs")
+    val catalogName = "json_runtime_schema_cat"
+    val runtimeSchemaKey = s"spark.sql.catalog.$catalogName.SCHEMA"
+
+    withCatalog(catalogName, logDir, "json",
+      Map("schema" -> "value STRING, level STRING")) {
+      val original = spark.table(s"$catalogName.default.spark_log_file")
+      assert(original.columns.toSeq === Seq("value", "level", "dt", "hour", "app_id"))
+
+      try {
+        spark.sql(s"SET $runtimeSchemaKey=value STRING, ts STRING").collect()
+        val changed = spark.table(s"$catalogName.default.spark_log_file")
+        assert(changed.columns.toSeq === Seq("value", "ts", "dt", "hour", "app_id"))
+        assert(original.columns.toSeq === Seq("value", "level", "dt", "hour", "app_id"))
+
+        spark.conf.set(runtimeSchemaKey, "   ")
+        val cleared = spark.table(s"$catalogName.default.spark_log_file")
+        assert(cleared.columns.toSeq === Seq("value", "dt", "hour", "app_id"))
+
+        spark.conf.unset(runtimeSchemaKey)
+        val restored = spark.table(s"$catalogName.default.spark_log_file")
+        assert(restored.columns.toSeq === Seq("value", "level", "dt", "hour", "app_id"))
+      } finally {
+        spark.conf.unset(runtimeSchemaKey)
+      }
+    }
+  }
+
   test("reject an explicit schema that conflicts with partition columns") {
     val logDir = resourcePath("json_logs")
     withCatalog("json_explicit_collision_cat", logDir, "json",
