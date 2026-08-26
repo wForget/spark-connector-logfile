@@ -8,7 +8,7 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, HashSet}
 
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
+import org.apache.hadoop.fs.{FileStatus, FileSystem, Path, PathFilter}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -74,9 +74,10 @@ class LogFileScan(
 
     val partitions = new ArrayBuffer[InputPartition]()
 
-    LogFileScan.listLogFiles(fs, logDirPath).foreach { case (file, appId) =>
-      addFilePartition(file, appId, partitions)
-    }
+    LogFileScan.listLogFiles(fs, logDirPath, pushedFilters, partitionTimeZone)
+      .foreach { case (file, appId) =>
+        addFilePartition(file, appId, partitions)
+      }
 
     partitions.toArray
   }
@@ -124,9 +125,7 @@ class LogFileScan(
     val modifiedAt = Instant.ofEpochMilli(file.getModificationTime).atZone(partitionTimeZone)
     val dt = DateTimeFormatter.ISO_LOCAL_DATE.format(modifiedAt)
     val hour = LogFileScan.HourFormatter.format(modifiedAt)
-    if (matchesFilters(dt, hour, appId)) {
-      partitions += LogFilePartition(file.getPath.toString, appId, dt, hour, file.getLen)
-    }
+    partitions += LogFilePartition(file.getPath.toString, appId, dt, hour, file.getLen)
   }
 
   private def buildHadoopConf(): Configuration = {
@@ -139,41 +138,14 @@ class LogFileScan(
     hadoopOptions.foreach { case (k, v) => conf.set(k, v) }
     conf
   }
-
-  private def matchesFilters(dt: String, hour: String, appId: String): Boolean =
-    pushedFilters.forall(matchesFilter(_, dt, hour, appId))
-
-  private def matchesFilter(filter: Filter, dt: String, hour: String, appId: String): Boolean = {
-    def pv(attr: String): Option[String] = attr.toLowerCase match {
-      case "dt"     => Some(dt)
-      case "hour"   => Some(hour)
-      case "app_id" => Some(appId)
-      case _        => None
-    }
-
-    filter match {
-      case EqualTo(attr, value) =>
-        pv(attr).forall(_ == String.valueOf(value))
-      case In(attr, values) =>
-        pv(attr).forall(v => values.exists(x => v == String.valueOf(x)))
-      case StringStartsWith(attr, value) =>
-        pv(attr).forall(_.startsWith(String.valueOf(value)))
-      case GreaterThan(attr, value) =>
-        pv(attr).forall(_ > String.valueOf(value))
-      case GreaterThanOrEqual(attr, value) =>
-        pv(attr).forall(_ >= String.valueOf(value))
-      case LessThan(attr, value) =>
-        pv(attr).forall(_ < String.valueOf(value))
-      case LessThanOrEqual(attr, value) =>
-        pv(attr).forall(_ <= String.valueOf(value))
-      case _ => true
-    }
-  }
 }
 
 object LogFileScan {
   private val CodecSuffixes = Seq(".lz4", ".snappy", ".zstd", ".lzf", ".gz", ".bz2")
   private val HourFormatter = DateTimeFormatter.ofPattern("HH", Locale.ROOT)
+  private object CompletedLogPathFilter extends PathFilter {
+    override def accept(path: Path): Boolean = isCompletedLogPath(path)
+  }
 
   def isCompletedLogPath(path: Path): Boolean = {
     val name = path.getName
@@ -184,22 +156,39 @@ object LogFileScan {
    * Lists completed log files below the configured root. The root entry determines app_id and
    * whether Spark's rolling event-log naming rules apply to every descendant file.
    */
-  def listLogFiles(fs: FileSystem, logDirPath: Path): Seq[(FileStatus, String)] = {
-    val discovered = new ArrayBuffer[(FileStatus, String)]()
+  def listLogFiles(fs: FileSystem, logDirPath: Path): Seq[(FileStatus, String)] =
+    listLogFiles(fs, logDirPath, Array.empty, ZoneId.systemDefault())
 
-    fs.listStatus(logDirPath).foreach { entry =>
-      if (isCompletedLogPath(entry.getPath)) {
-        if (entry.isFile) {
-          discovered += entry -> extractAppId(entry.getPath.getName)
-        } else if (entry.isDirectory && !entry.isSymlink) {
-          val dirName = entry.getPath.getName
-          val isRollingDirectory = dirName.startsWith("eventlog_v2_")
-          val appId = if (isRollingDirectory) {
-            dirName.stripPrefix("eventlog_v2_")
-          } else {
-            dirName
-          }
-          collectDirectoryLogFiles(fs, entry.getPath, isRollingDirectory).foreach { file =>
+  /**
+   * Lists completed log files and applies partition filters before returning scan candidates.
+   * Path-only filtering happens inside FileSystem.listStatus; filters that require FileStatus
+   * metadata are evaluated as soon as each leaf status is available.
+   */
+  def listLogFiles(
+      fs: FileSystem,
+      logDirPath: Path,
+      pushedFilters: Array[Filter],
+      partitionTimeZone: ZoneId): Seq[(FileStatus, String)] = {
+    val discovered = new ArrayBuffer[(FileStatus, String)]()
+    val partitionFilter = new PartitionFilter(pushedFilters, partitionTimeZone)
+
+    fs.listStatus(logDirPath, CompletedLogPathFilter).foreach { entry =>
+      if (entry.isFile) {
+        val appId = extractAppId(entry.getPath.getName)
+        if (partitionFilter.matchesFile(entry, appId)) {
+          discovered += entry -> appId
+        }
+      } else if (entry.isDirectory && !entry.isSymlink) {
+        val dirName = entry.getPath.getName
+        val isRollingDirectory = dirName.startsWith("eventlog_v2_")
+        val appId = if (isRollingDirectory) {
+          dirName.stripPrefix("eventlog_v2_")
+        } else {
+          dirName
+        }
+        if (partitionFilter.matchesAppId(appId)) {
+          collectDirectoryLogFiles(
+              fs, entry.getPath, appId, isRollingDirectory, partitionFilter).foreach { file =>
             discovered += file -> appId
           }
         }
@@ -212,7 +201,9 @@ object LogFileScan {
   private def collectDirectoryLogFiles(
       fs: FileSystem,
       root: Path,
-      isRollingDirectory: Boolean): Seq[FileStatus] = {
+      appId: String,
+      isRollingDirectory: Boolean,
+      partitionFilter: PartitionFilter): Seq[FileStatus] = {
     val pendingDirectories = ArrayBuffer(root)
     val visitedDirectories = HashSet.empty[String]
     val files = new ArrayBuffer[FileStatus]()
@@ -221,20 +212,97 @@ object LogFileScan {
       val directory = pendingDirectories.remove(pendingDirectories.length - 1)
       val qualifiedDirectory = fs.makeQualified(directory).toUri.normalize().toString
       if (visitedDirectories.add(qualifiedDirectory)) {
-        fs.listStatus(directory).foreach { entry =>
-          if (isCompletedLogPath(entry.getPath)) {
-            if (entry.isDirectory && !entry.isSymlink) {
-              pendingDirectories += entry.getPath
-            } else if (entry.isFile &&
-                (!isRollingDirectory || entry.getPath.getName.startsWith("events_"))) {
-              files += entry
-            }
+        fs.listStatus(directory, CompletedLogPathFilter).foreach { entry =>
+          if (entry.isDirectory && !entry.isSymlink) {
+            pendingDirectories += entry.getPath
+          } else if (entry.isFile &&
+              (!isRollingDirectory || entry.getPath.getName.startsWith("events_")) &&
+              partitionFilter.matchesFile(entry, appId)) {
+            files += entry
           }
         }
       }
     }
 
     files.sortBy(_.getPath.toString).toSeq
+  }
+
+  private final class PartitionFilter(
+      filters: Array[Filter],
+      partitionTimeZone: ZoneId) {
+
+    private val needsFileTime = filters.exists { filter =>
+      filterAttribute(filter).exists { attribute =>
+        val normalized = attribute.toLowerCase(Locale.ROOT)
+        normalized == "dt" || normalized == "hour"
+      }
+    }
+
+    def matchesAppId(appId: String): Boolean =
+      matchesFilters(None, None, Some(appId))
+
+    def matchesFile(file: FileStatus, appId: String): Boolean = {
+      if (!matchesAppId(appId)) {
+        false
+      } else if (!needsFileTime) {
+        true
+      } else {
+        val modifiedAt = Instant.ofEpochMilli(file.getModificationTime).atZone(partitionTimeZone)
+        val dt = DateTimeFormatter.ISO_LOCAL_DATE.format(modifiedAt)
+        val hour = HourFormatter.format(modifiedAt)
+        matchesFilters(Some(dt), Some(hour), Some(appId))
+      }
+    }
+
+    private def matchesFilters(
+        dt: Option[String],
+        hour: Option[String],
+        appId: Option[String]): Boolean =
+      filters.forall(matchesFilter(_, dt, hour, appId))
+
+    private def matchesFilter(
+        filter: Filter,
+        dt: Option[String],
+        hour: Option[String],
+        appId: Option[String]): Boolean = {
+      val partitionValue = filterAttribute(filter).flatMap { attribute =>
+        attribute.toLowerCase(Locale.ROOT) match {
+          case "dt"     => dt
+          case "hour"   => hour
+          case "app_id" => appId
+          case _        => None
+        }
+      }
+
+      filter match {
+        case EqualTo(_, value) =>
+          partitionValue.forall(_ == String.valueOf(value))
+        case In(_, values) =>
+          partitionValue.forall(v => values.exists(x => v == String.valueOf(x)))
+        case StringStartsWith(_, value) =>
+          partitionValue.forall(_.startsWith(String.valueOf(value)))
+        case GreaterThan(_, value) =>
+          partitionValue.forall(_ > String.valueOf(value))
+        case GreaterThanOrEqual(_, value) =>
+          partitionValue.forall(_ >= String.valueOf(value))
+        case LessThan(_, value) =>
+          partitionValue.forall(_ < String.valueOf(value))
+        case LessThanOrEqual(_, value) =>
+          partitionValue.forall(_ <= String.valueOf(value))
+        case _ => true
+      }
+    }
+  }
+
+  private def filterAttribute(filter: Filter): Option[String] = filter match {
+    case f: EqualTo            => Some(f.attribute)
+    case f: In                 => Some(f.attribute)
+    case f: StringStartsWith   => Some(f.attribute)
+    case f: GreaterThan        => Some(f.attribute)
+    case f: GreaterThanOrEqual => Some(f.attribute)
+    case f: LessThan           => Some(f.attribute)
+    case f: LessThanOrEqual    => Some(f.attribute)
+    case _                     => None
   }
 
   def extractAppId(fileName: String): String = {
