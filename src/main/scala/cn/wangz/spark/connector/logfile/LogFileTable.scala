@@ -11,14 +11,16 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 class LogFileTable(options: CaseInsensitiveStringMap) extends Table with SupportsRead {
 
+  private val fileFormat: String = LogFileTable.normalizeFileFormat(
+    options.getOrDefault("fileFormat", "json"))
+
   private lazy val dataSchema: StructType = {
     val shouldInfer = java.lang.Boolean.parseBoolean(
       options.getOrDefault("inferSchema", "false"))
-    val format = options.getOrDefault("fileFormat", "json").toLowerCase
 
-    if (shouldInfer && (format == "json" || format == "csv")) {
+    if (shouldInfer && (fileFormat == "json" || fileFormat == "csv")) {
       val inferredSchema =
-        LogFileSchemaInference.infer(options, format).getOrElse(LogFileTable.DATA_SCHEMA)
+        LogFileSchemaInference.infer(options, fileFormat).getOrElse(LogFileTable.DATA_SCHEMA)
       LogFileTable.validateNoPartitionColumnConflicts(inferredSchema)
       inferredSchema
     } else {
@@ -35,10 +37,12 @@ class LogFileTable(options: CaseInsensitiveStringMap) extends Table with Support
     util.Collections.singleton(TableCapability.BATCH_READ)
 
   override def newScanBuilder(scanOptions: CaseInsensitiveStringMap): ScanBuilder =
-    new LogFileScanBuilder(options, dataSchema)
+    new LogFileScanBuilder(options, dataSchema, fileFormat)
 }
 
 object LogFileTable {
+  val SUPPORTED_FILE_FORMATS: Seq[String] = Seq("csv", "json", "text", "tfile")
+
   val PARTITION_COLUMNS: Set[String] = Set("dt", "hour", "app_id")
 
   val DATA_SCHEMA: StructType = new StructType()
@@ -50,6 +54,14 @@ object LogFileTable {
     .add("app_id", DataTypes.StringType, nullable = false)
 
   val SCHEMA: StructType = new StructType(DATA_SCHEMA.fields ++ PARTITION_SCHEMA.fields)
+
+  private[logfile] def normalizeFileFormat(fileFormat: String): String = {
+    val normalized = Option(fileFormat).map(_.toLowerCase(Locale.ROOT)).getOrElse("")
+    require(SUPPORTED_FILE_FORMATS.contains(normalized),
+      s"Unsupported fileFormat '$fileFormat'. " +
+        s"Supported formats: ${SUPPORTED_FILE_FORMATS.mkString(", ")}")
+    normalized
+  }
 
   private[logfile] def validateNoPartitionColumnConflicts(dataSchema: StructType): Unit = {
     val conflicts = dataSchema.fieldNames

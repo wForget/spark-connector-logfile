@@ -24,7 +24,8 @@ import org.apache.spark.util.SerializableConfiguration
 class LogFileScan(
     options: CaseInsensitiveStringMap,
     dataSchema: StructType,
-    pushedFilters: Array[Filter]) extends Scan with Batch {
+    pushedFilters: Array[Filter],
+    fileFormat: String) extends Scan with Batch {
 
   private val logDir: String = {
     val dir = options.get("logDir")
@@ -32,8 +33,6 @@ class LogFileScan(
       "logDir is required. Set spark.sql.catalog.<name>.logDir")
     dir
   }
-
-  private val fileFormat: String = options.getOrDefault("fileFormat", "json")
 
   private val hadoopOptions: Map[String, String] = {
     options.asCaseSensitiveMap().asScala
@@ -85,21 +84,20 @@ class LogFileScan(
   }
 
   override def createReaderFactory(): PartitionReaderFactory = {
-    val format = fileFormat.toLowerCase
-    format match {
+    fileFormat match {
       case "tfile" =>
         val spark = SparkSession.active
         val broadcastedConf: Broadcast[SerializableConfiguration] =
           spark.sparkContext.broadcast(
             new SerializableConfiguration(buildHadoopConf()))
         new TFileLogFilePartitionReaderFactory(broadcastedConf)
-      case _ =>
+      case "json" | "csv" | "text" =>
         val spark = SparkSession.active
         val sqlConf = spark.sessionState.conf
         val broadcastedConf = spark.sparkContext.broadcast(
           new SerializableConfiguration(buildHadoopConf()))
         val params = options.asCaseSensitiveMap().asScala.toMap
-        format match {
+        fileFormat match {
           case "json" =>
             JsonLogFilePartitionReaderFactory(
               sqlConf, broadcastedConf,
@@ -110,11 +108,13 @@ class LogFileScan(
               sqlConf, broadcastedConf,
               dataSchema, dataSchema,
               LogFileTable.PARTITION_SCHEMA, params)
-          case _ =>
+          case "text" =>
             TextLogFilePartitionReaderFactory(
               sqlConf, broadcastedConf,
               dataSchema, LogFileTable.PARTITION_SCHEMA, params)
         }
+      case unsupported =>
+        throw new IllegalStateException(s"Unsupported normalized fileFormat: $unsupported")
     }
   }
 

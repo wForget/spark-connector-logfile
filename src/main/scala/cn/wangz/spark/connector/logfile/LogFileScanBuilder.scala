@@ -5,12 +5,15 @@ import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-class LogFileScanBuilder(options: CaseInsensitiveStringMap, dataSchema: StructType)
+class LogFileScanBuilder(
+    options: CaseInsensitiveStringMap,
+    dataSchema: StructType,
+    fileFormat: String)
     extends ScanBuilder with SupportsPushDownFilters {
 
   private var _pushedFilters: Array[Filter] = Array.empty
 
-  override def build(): Scan = new LogFileScan(options, dataSchema, _pushedFilters)
+  override def build(): Scan = new LogFileScan(options, dataSchema, _pushedFilters, fileFormat)
 
   override def pushFilters(filters: Array[Filter]): Array[Filter] = {
     val (pushed, remaining) = filters.partition(isPartitionFilter)

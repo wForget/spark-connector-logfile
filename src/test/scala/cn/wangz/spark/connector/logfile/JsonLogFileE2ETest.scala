@@ -46,6 +46,25 @@ class JsonLogFileE2ETest extends LogFileTestBase {
     }
   }
 
+  test("file format is case insensitive") {
+    val logDir = resourcePath("json_logs")
+    withCatalog("json_uppercase_format_cat", logDir, "JSON") {
+      assert(spark.sql(
+        "SELECT * FROM json_uppercase_format_cat.default.spark_log_file").count() === 4)
+    }
+  }
+
+  test("reject unsupported file format instead of falling back to text") {
+    val logDir = resourcePath("json_logs")
+    withCatalog("json_invalid_format_cat", logDir, "jsno") {
+      val error = intercept[IllegalArgumentException] {
+        spark.sql("SELECT * FROM json_invalid_format_cat.default.spark_log_file")
+      }
+      assert(error.getMessage.contains("Unsupported fileFormat 'jsno'"))
+      assert(error.getMessage.contains("csv, json, text, tfile"))
+    }
+  }
+
   test("read log files from eventlog_v2 directory structure") {
     val logDir = resourcePath("eventlog_v2_logs")
     withCatalog("json_v2_cat", logDir, "json") {
