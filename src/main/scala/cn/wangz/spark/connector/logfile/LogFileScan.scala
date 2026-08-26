@@ -1,7 +1,8 @@
 package cn.wangz.spark.connector.logfile
 
-import java.text.SimpleDateFormat
-import java.util.{Date, Locale}
+import java.time.{DateTimeException, Instant, ZoneId}
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
@@ -10,6 +11,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.connector.logfile.{
   CsvLogFilePartitionReaderFactory,
   JsonLogFilePartitionReaderFactory,
@@ -17,6 +19,7 @@ import org.apache.spark.sql.connector.logfile.{
 }
 import org.apache.spark.sql.connector.read._
 import org.apache.spark.sql.sources._
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.util.SerializableConfiguration
@@ -41,6 +44,18 @@ class LogFileScan(
       .toMap
   }
 
+  private val partitionTimeZone: ZoneId = {
+    val sessionTimeZone = SQLConf.get.sessionLocalTimeZone
+    val configuredTimeZone = options.getOrDefault("partitionTimeZone", sessionTimeZone)
+    try {
+      DateTimeUtils.getZoneId(configuredTimeZone)
+    } catch {
+      case error: DateTimeException =>
+        throw new IllegalArgumentException(
+          s"Invalid partitionTimeZone '$configuredTimeZone'", error)
+    }
+  }
+
   override def readSchema(): StructType =
     new StructType(dataSchema.fields ++ LogFileTable.PARTITION_SCHEMA.fields)
 
@@ -57,17 +72,15 @@ class LogFileScan(
       return Array.empty
     }
 
-    val dateFmt = new SimpleDateFormat("yyyy-MM-dd")
-    val hourFmt = new SimpleDateFormat("HH")
     val partitions = new ArrayBuffer[InputPartition]()
 
     fs.listStatus(logDirPath).foreach { entry =>
       if (LogFileScan.isCompletedLogPath(entry.getPath)) {
         if (entry.isFile) {
           addFilePartition(entry, LogFileScan.extractAppId(entry.getPath.getName),
-            dateFmt, hourFmt, partitions)
+            partitions)
         } else if (entry.isDirectory) {
-          collectDirectoryPartitions(fs, entry, dateFmt, hourFmt, partitions)
+          collectDirectoryPartitions(fs, entry, partitions)
         }
       }
     }
@@ -118,8 +131,6 @@ class LogFileScan(
   private def collectDirectoryPartitions(
       fs: FileSystem,
       dirEntry: FileStatus,
-      dateFmt: SimpleDateFormat,
-      hourFmt: SimpleDateFormat,
       partitions: ArrayBuffer[InputPartition]): Unit = {
     val dirName = dirEntry.getPath.getName
     val isRollingDirectory = dirName.startsWith("eventlog_v2_")
@@ -136,11 +147,11 @@ class LogFileScan(
 
     fs.listStatus(dirEntry.getPath, (p: Path) => logFileFilter(p)).foreach { child =>
       if (child.isFile) {
-        addFilePartition(child, appId, dateFmt, hourFmt, partitions)
+        addFilePartition(child, appId, partitions)
       } else if (child.isDirectory) {
         fs.listStatus(child.getPath, (p: Path) => logFileFilter(p)).foreach { nf =>
           if (nf.isFile) {
-            addFilePartition(nf, appId, dateFmt, hourFmt, partitions)
+            addFilePartition(nf, appId, partitions)
           }
         }
       }
@@ -150,12 +161,10 @@ class LogFileScan(
   private def addFilePartition(
       file: FileStatus,
       appId: String,
-      dateFmt: SimpleDateFormat,
-      hourFmt: SimpleDateFormat,
       partitions: ArrayBuffer[InputPartition]): Unit = {
-    val modDate = new Date(file.getModificationTime)
-    val dt = dateFmt.format(modDate)
-    val hour = hourFmt.format(modDate)
+    val modifiedAt = Instant.ofEpochMilli(file.getModificationTime).atZone(partitionTimeZone)
+    val dt = DateTimeFormatter.ISO_LOCAL_DATE.format(modifiedAt)
+    val hour = LogFileScan.HourFormatter.format(modifiedAt)
     if (matchesFilters(dt, hour, appId)) {
       partitions += LogFilePartition(file.getPath.toString, appId, dt, hour, file.getLen)
     }
@@ -205,6 +214,7 @@ class LogFileScan(
 
 object LogFileScan {
   private val CodecSuffixes = Seq(".lz4", ".snappy", ".zstd", ".lzf", ".gz", ".bz2")
+  private val HourFormatter = DateTimeFormatter.ofPattern("HH", Locale.ROOT)
 
   def isCompletedLogPath(path: Path): Boolean = {
     val name = path.getName
