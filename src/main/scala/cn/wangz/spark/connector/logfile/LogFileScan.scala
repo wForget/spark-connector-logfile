@@ -82,7 +82,8 @@ class LogFileScan(
         val broadcastedConf: Broadcast[SerializableConfiguration] =
           spark.sparkContext.broadcast(
             new SerializableConfiguration(buildHadoopConf()))
-        new TFileLogFilePartitionReaderFactory(broadcastedConf)
+        val params = options.asCaseSensitiveMap().asScala.toMap
+        new TFileLogFilePartitionReaderFactory(broadcastedConf, params)
       case "json" | "csv" | "text" =>
         val spark = SparkSession.active
         val sqlConf = spark.sessionState.conf

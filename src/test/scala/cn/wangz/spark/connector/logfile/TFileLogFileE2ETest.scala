@@ -20,6 +20,11 @@ class TFileLogFileE2ETest extends LogFileTestBase {
 
       val appIds = df.select("app_id").distinct().collect().map(_.getString(0)).toSet
       assert(appIds === Set("app_tfile_001"))
+
+      val inputFiles = df.selectExpr("input_file_name()")
+        .collect().map(_.getString(0)).toSet
+      assert(inputFiles.size === 1)
+      assert(inputFiles.head.endsWith("/app_tfile_001"))
     }
   }
 
@@ -60,5 +65,23 @@ class TFileLogFileE2ETest extends LogFileTestBase {
     intercept[IOException](reader.next())
     reader.close()
     reader.close()
+  }
+
+  test("honor ignoreCorruptFiles for tfile") {
+    val logDir = Files.createTempDirectory("tfile-corrupt-directory-")
+    logDir.toFile.deleteOnExit()
+    val validFile = logDir.resolve("valid_tfile")
+    validFile.toFile.deleteOnExit()
+    TFileTestDataGenerator.generate(validFile.toString, Seq("valid event"))
+    val corruptFile = logDir.resolve("corrupt_tfile")
+    Files.write(corruptFile, Array[Byte](1, 2, 3, 4))
+    corruptFile.toFile.deleteOnExit()
+
+    withCatalog("tfile_corrupt_cat", logDir.toString, "tfile",
+      Map("ignoreCorruptFiles" -> "true")) {
+      val values = spark.sql("SELECT value FROM tfile_corrupt_cat.default.spark_log_file")
+        .collect().map(_.getString(0)).toSeq
+      assert(values === Seq("valid event"))
+    }
   }
 }
