@@ -3,6 +3,7 @@ package org.apache.spark.sql.connector.logfile
 import java.util.Locale
 
 import scala.collection.JavaConverters._
+import scala.util.Random
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
@@ -18,6 +19,8 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import cn.wangz.spark.connector.logfile.LogFileScan
 
 object LogFileSchemaInference {
+
+  private val SchemaInferenceSampleSize = 100
 
   def infer(options: CaseInsensitiveStringMap, format: String): Option[StructType] = {
     val spark = SparkSession.active
@@ -56,6 +59,7 @@ object LogFileSchemaInference {
   }
 
   private def collectSampleFiles(fs: FileSystem, logDirPath: Path): Seq[FileStatus] = {
-    LogFileScan.listLogFiles(fs, logDirPath).map(_._1)
+    Random.shuffle(LogFileScan.listLogFiles(fs, logDirPath).map(_._1))
+      .take(SchemaInferenceSampleSize)
   }
 }

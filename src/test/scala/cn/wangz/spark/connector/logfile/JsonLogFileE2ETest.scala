@@ -112,6 +112,25 @@ class JsonLogFileE2ETest extends LogFileTestBase {
     }
   }
 
+  test("infer json schema from at most 100 files") {
+    val root = Files.createTempDirectory("json-schema-sample-")
+    root.toFile.deleteOnExit()
+
+    (0 until 101).foreach { index =>
+      writeJson(root.resolve(f"app_$index%03d"),
+        s"""{"value":"sampled $index","sampled_field_$index":$index}""")
+    }
+
+    withCatalog("json_sample_cat", root.toString, "json",
+      Map("inferSchema" -> "true")) {
+      val df = spark.sql("SELECT * FROM json_sample_cat.default.spark_log_file")
+
+      val sampledFields = df.columns.filter(_.startsWith("sampled_field_"))
+      assert(sampledFields.length === 100)
+      assert(df.count() === 101)
+    }
+  }
+
   test("inferSchema=false uses default value-only schema for json") {
     val logDir = resourcePath("json_extra_logs")
     withCatalog("json_noinfer_cat", logDir, "json") {
