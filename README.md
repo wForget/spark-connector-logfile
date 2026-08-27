@@ -1,243 +1,239 @@
-# spark-connector-logfile
+# Spark SQL 读取日志文件
 
-一个基于 Spark DataSource V2 Catalog API 的只读日志连接器。它把指定目录中的日志文件暴露为 Spark SQL 表，并自动补充 `dt`、`hour` 和 `app_id` 分区列，适合直接使用 SQL 分析 Spark Event Log 或其他按应用组织的日志。
+## 背景
 
-## 功能特性
+`spark-connector-logfile` 是一个基于 Spark DataSource V2 Catalog API 的只读日志连接器。它将日志目录映射为 Spark SQL 表，并根据文件信息添加 `dt`、`hour`、`app_id` 分区列，便于在查询前按日期、小时和应用裁剪文件。
 
-- 支持 `json`、`csv`、`text` 和 Hadoop `TFile` 格式
-- 支持根目录中的平铺日志文件，以及递归扫描子目录
-- 识别 Spark 滚动事件日志目录 `eventlog_v2_<app_id>`
-- 根据每个日志文件的修改时间生成 `dt` 和 `hour` 分区列
-- 对 `dt`、`hour`、`app_id` 下推过滤条件，在读取前裁剪文件
-- 支持通过 `SHOW PARTITIONS` 查看和筛选逻辑分区
-- JSON/CSV 支持显式 schema 和可选 schema 推断；默认只读取 `value` 字段
-- 透传 Spark 文件格式读取参数及 `hadoop.*` 配置
-- 兼容 Spark 3.5 / Scala 2.12 和 Spark 4.2 / Scala 2.13
+连接器支持 JSON、CSV、Text 和 Hadoop TFile，可用于读取 Spark Event Log 或其他按应用组织的日志文件。
 
-## 兼容性
+## 打包与配置
 
-| Maven Profile | Spark | Scala | 最低 Java 版本 | 默认 |
-| --- | --- | --- | --- | --- |
-| `spark-3.5` | 3.5.7 | 2.12.18 | 8 | 否 |
-| `spark-4.2` | 4.2.0 | 2.13.18 | 17 | 是 |
+### 打包
 
-构建和运行 `spark-3.5` Profile 需要 JDK 8 或更高版本，`spark-4.2` Profile 需要 JDK 17 或更高版本；同时应使用与目标 Spark 发行版一致的 Scala 版本。Spark 和 Scala 依赖以 `provided` 方式打包，不会包含在连接器 JAR 中。
-
-## 构建
-
-构建默认的 Spark 4.2 版本：
+项目默认构建 Spark 4.2 / Scala 2.13 版本：
 
 ```bash
-mvn clean package
+mvn clean package -DskipTests
 ```
 
-构建指定版本：
+也可以通过 Maven Profile 构建指定版本：
 
 ```bash
-mvn -Pspark-3.5 clean package
-mvn -Pspark-4.2 clean package
+# Spark 3.5.7 / Scala 2.12 / Java 8+
+mvn -Pspark-3.5 clean package -DskipTests
+
+# Spark 4.2.0 / Scala 2.13 / Java 17+
+mvn -Pspark-4.2 clean package -DskipTests
 ```
 
-产物路径分别为：
-
-```text
-target/spark-3.5/spark-connector-logfile-1.0-SNAPSHOT-spark-3.5_2.12.jar
-target/spark-4.2/spark-connector-logfile-1.0-SNAPSHOT-spark-4.2_2.13.jar
-```
-
-## 快速开始
-
-以 Spark 4.2 为例，启动 `spark-sql` 并注册 Catalog：
-
-```bash
-spark-sql \
-  --jars target/spark-4.2/spark-connector-logfile-1.0-SNAPSHOT-spark-4.2_2.13.jar \
-  --conf spark.sql.catalog.logs=cn.wangz.spark.connector.logfile.LogFileCatalog \
-  --conf spark.sql.catalog.logs.logDir=file:///data/spark-events \
-  --conf spark.sql.catalog.logs.fileFormat=json
-```
-
-随后可以像查询普通表一样读取日志：
+生成的 JAR 位于 `target/<profile>/`。将其复制到 `$SPARK_HOME/jars`，或在 Spark SQL 中加载：
 
 ```sql
-SELECT value, dt, hour, app_id
-FROM logs.default.spark_log_file
-WHERE dt = '2026-08-26'
-  AND hour >= '09'
-  AND app_id = 'application_123';
+ADD JAR hdfs:///path/spark-connector-logfile-1.0-SNAPSHOT-spark-4.2_2.13.jar;
 ```
 
-也可以在代码中配置：
+Spark 与 Scala 依赖不会打入连接器 JAR，运行时版本应与所选 Profile 一致。
 
-```scala
-val spark = SparkSession.builder()
-  .config(
-    "spark.sql.catalog.logs",
-    "cn.wangz.spark.connector.logfile.LogFileCatalog")
-  .config("spark.sql.catalog.logs.logDir", "hdfs:///spark-history")
-  .config("spark.sql.catalog.logs.fileFormat", "json")
-  .config("spark.sql.catalog.logs.inferSchema", "true")
-  .getOrCreate()
+### 配置 Catalog
 
-val events = spark.table("logs.default.spark_log_file")
-events.filter("app_id = 'application_123'").show(false)
+```properties
+spark.sql.catalog.logfile=cn.wangz.spark.connector.logfile.LogFileCatalog
+spark.sql.catalog.logfile.logDir=hdfs:///spark-history
+spark.sql.catalog.logfile.fileFormat=json
 ```
 
-Catalog 默认只暴露 `default` 命名空间中的一张表：
-
-```text
-logs.default.spark_log_file
-```
-
-可通过 `tableName` 参数修改表名。
-
-可以查看全部或部分匹配的逻辑分区：
-
-```sql
-SHOW PARTITIONS logs.default.spark_log_file;
-SHOW PARTITIONS logs.default.spark_log_file PARTITION (dt = '2026-08-26');
-```
-
-同一应用在同一小时内的多个日志文件会合并显示为一个 `dt/hour/app_id` 分区。
-
-## 配置项
-
-所有 Catalog 参数都使用以下前缀：
-
-```text
-spark.sql.catalog.<catalog_name>.<option>
-```
+所有参数的前缀均为 `spark.sql.catalog.<catalog_name>.`：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `logDir` | 无 | 日志根目录，必填；支持 Hadoop `Path` 可识别的 URI |
-| `fileFormat` | `json` | 日志格式：`json`、`csv`、`text` 或 `tfile`，大小写不敏感 |
-| `schema` | 无 | JSON/CSV 数据列的 DDL schema；配置后优先于 `inferSchema` |
-| `inferSchema` | `false` | 是否为 JSON/CSV 推断 schema；其他格式忽略该参数 |
+| `logDir` | 无 | 日志根目录，必填 |
+| `fileFormat` | `json` | `json`、`csv`、`text` 或 `tfile` |
 | `tableName` | `spark_log_file` | Catalog 暴露的表名 |
-| `partitionTimeZone` | `spark.sql.session.timeZone` | 将文件修改时间转换为 `dt`、`hour` 时使用的时区 |
-| `hadoop.<key>` | 无 | 写入读取任务 Hadoop Configuration 的配置，例如 `hadoop.fs.s3a.endpoint` |
+| `schema` | 无 | JSON/CSV 的 Spark DDL schema |
+| `inferSchema` | `false` | 是否为 JSON/CSV 推断 schema |
+| `partitionTimeZone` | `spark.sql.session.timeZone` | 生成 `dt`、`hour` 时使用的时区 |
+| `hadoop.<key>` | 无 | 传入 Hadoop Configuration 的配置 |
 
-其他参数会继续传给对应的 Spark 文件读取器。例如：
+其他参数会传给对应的 Spark 文件读取器，例如 CSV 的 `header`、JSON 的 `multiLine`、Text 的 `wholetext` 和通用的 `ignoreCorruptFiles`。
+
+## 使用
+
+### 表与分区
+
+Catalog 默认提供以下表：
 
 ```text
-spark.sql.catalog.logs.header=true
-spark.sql.catalog.logs.multiLine=false
-spark.sql.catalog.logs.ignoreCorruptFiles=true
-spark.sql.catalog.logs.wholetext=true
+logfile.default.spark_log_file
 ```
 
-通过 DataFrameReader 指定的非结构性选项会覆盖 Catalog 同名选项，参数名大小写不敏感：
+表包含日志数据列和三个分区列：
 
-```scala
-spark.read
-  .option("wholetext", "true")
-  .option("partitionTimeZone", "Asia/Shanghai")
-  .table("logs.default.spark_log_file")
-```
+| 分区列 | 类型 | 来源 |
+| --- | --- | --- |
+| `dt` | `string` | 文件修改日期，格式为 `yyyy-MM-dd` |
+| `hour` | `string` | 文件修改小时，格式为 `HH` |
+| `app_id` | `string` | 日志文件名或日志根目录下的一级目录名 |
 
-`logDir`、`fileFormat`、`schema` 和 `inferSchema` 决定表的位置或 schema，不能在单次读取时改成不同的值。
-
-可以在 Catalog 初始化后通过 `SET` 更新 `schema`，后续新建的查询或 DataFrame 会使用新 schema：
+查看表、分区并查询日志：
 
 ```sql
-SET spark.sql.catalog.logs.schema=`Event` STRING, `Job ID` LONG;
+SHOW TABLES IN logfile;
+SHOW PARTITIONS logfile.default.spark_log_file;
+
+SELECT *
+FROM logfile.default.spark_log_file
+WHERE dt = '2026-08-26'
+  AND hour = '09'
+  AND app_id = 'application_123';
 ```
 
-已经完成分析的 DataFrame、临时视图或缓存表不会自动改变 schema。把运行时 `schema` 设置为空白字符串可回退到 `inferSchema` 或默认的 `value` schema；取消该运行时配置则恢复 Catalog 初始化时的配置值。
+对 `dt`、`hour` 和 `app_id` 的常用比较、`IN` 及前缀过滤会在读取文件前下推。
 
-## 表结构
+### Schema
 
-默认结构如下：
+默认数据 schema 为 `value STRING`。JSON/CSV 可以显式配置 schema：
 
-| 列名 | 类型 | 可空 | 来源 |
-| --- | --- | --- | --- |
-| `value` | `string` | 是 | 日志内容或源数据中的 `value` 字段 |
-| `dt` | `string` | 否 | 文件修改时间对应的日期，格式为 `yyyy-MM-dd` |
-| `hour` | `string` | 否 | 文件修改时间对应的小时，格式为 `HH` |
-| `app_id` | `string` | 否 | 根据日志根目录下的文件或目录名称提取 |
-
-配置 `schema` 后，JSON/CSV 数据列按 Spark DDL 解析，例如 ``Event STRING, `Job ID` LONG``。未配置 `schema` 且启用 `inferSchema=true` 时，数据列由 Spark 推断。推断会从符合条件的日志文件中随机采样最多 100 个；正常查询仍会读取所有符合条件的日志文件。采样可能遗漏只存在于未抽中文件中的字段。显式或推断的数据 schema 都不能包含与 `dt`、`hour`、`app_id` 同名（大小写不敏感）的字段，否则连接器会拒绝加载表。
-
-## 日志目录规则
-
-### 平铺文件
-
-根目录下每个文件被视为一个应用日志，文件名即 `app_id`：
-
-```text
-/data/logs/
-├── application_001
-└── application_002.gz
+```properties
+spark.sql.catalog.logfile.schema=`Event` STRING, `Job ID` LONG
 ```
 
-对应的 `app_id` 为 `application_001` 和 `application_002`。提取 ID 时会去掉已知压缩后缀：`.lz4`、`.snappy`、`.zstd`、`.lzf`、`.gz`、`.bz2`。
+也可以设置 `inferSchema=true`，连接器会从最多 100 个日志文件中采样推断。显式 schema 的优先级高于自动推断，且数据 schema 不能包含保留分区列 `dt`、`hour`、`app_id`。
 
-### 普通目录
-
-根目录下的普通目录名作为 `app_id`，其中的文件会被递归发现：
-
-```text
-/data/logs/application_001/year/month/events.json
-```
-
-该文件的 `app_id` 为 `application_001`。
-
-### Spark 滚动事件日志目录
-
-对于 `eventlog_v2_<app_id>` 目录，连接器会递归读取名称以 `events_` 开头的文件：
-
-```text
-/data/logs/eventlog_v2_application_001/
-├── events_1
-├── events_2
-└── appstatus_application_001
-```
-
-这里只有 `events_1`、`events_2` 会被读取，`app_id` 为 `application_001`。
-
-以下路径会被忽略：
-
-- 名称以 `.` 或 `_` 开头的文件和目录
-- 名称以 `.inprogress` 结尾的文件和目录
-- 目录符号链接
-
-不存在或为空的 `logDir` 返回空结果，不会报错。
-
-## 分区过滤
-
-连接器可对 `dt`、`hour` 和 `app_id` 下推以下过滤条件：
-
-- `=`、`IN`
-- `>`、`>=`、`<`、`<=`
-- 字符串前缀匹配（Spark `startsWith`）
-
-分区值均为固定格式字符串，因此日期和小时的字典序与时间顺序一致：
+运行时可以为后续查询更新 schema：
 
 ```sql
-SELECT app_id, count(*)
-FROM logs.default.spark_log_file
-WHERE dt BETWEEN '2026-08-01' AND '2026-08-31'
-  AND hour IN ('08', '09', '10')
-GROUP BY app_id;
+SET spark.sql.catalog.logfile.schema=`Event` STRING, `Job ID` LONG;
 ```
 
-## 测试
+### Spark Event Log 使用案例
 
-分别运行两套兼容性测试：
+以下案例假设 `logDir` 指向 Spark Event Log 目录。每个案例会按查询字段设置对应的 schema，执行时可根据实际 Spark 版本调整字段类型。
 
-```bash
-mvn -Pspark-3.5 clean test
-mvn -Pspark-4.2 clean test
+#### 1. 查询任务失败信息
+
+```sql
+SET spark.sql.catalog.logfile.schema=
+  `Event` STRING,
+  `Job ID` LONG,
+  `Completion Time` LONG,
+  `Job Result` STRUCT<
+    `Result`: STRING,
+    `Exception`: STRUCT<`Message`: STRING, `Stack Trace`: STRING>
+  >;
+
+SELECT
+  app_id,
+  `Job ID`,
+  substring_index(`Job Result`.`Exception`.`Message`, '\n', 1) AS error_message
+FROM logfile.default.spark_log_file
+WHERE dt = '2022-11-03'
+  AND `Event` = 'SparkListenerJobEnd'
+  AND `Job Result`.`Result` = 'JobFailed'
+LIMIT 10;
 ```
 
-运行 Spark 4.2 测试前，请确认 `mvn -version` 显示 Maven 正在使用 JDK 17 或更高版本。
+#### 2. 查询倾斜 Stage
 
-测试覆盖 Catalog 行为、四种文件格式、schema 推断、递归文件发现、分区时间与过滤、损坏/缺失文件处理，以及 Spark/Scala/Java 兼容性基线。
+```sql
+SET spark.sql.catalog.logfile.schema=
+  `Event` STRING,
+  `Stage ID` INT,
+  `Stage Attempt ID` INT,
+  `Task Metrics` STRUCT<`Executor Run Time`: LONG>;
 
-## 限制
+SELECT
+  app_id,
+  `Stage ID`,
+  percentile(`Task Metrics`.`Executor Run Time`, 0.75) AS p75,
+  max(`Task Metrics`.`Executor Run Time`) AS max_runtime
+FROM logfile.default.spark_log_file
+WHERE dt = '2022-11-08'
+  AND hour = '10'
+  AND `Event` = 'SparkListenerTaskEnd'
+  AND `Task Metrics`.`Executor Run Time` IS NOT NULL
+GROUP BY app_id, `Stage ID`
+ORDER BY max_runtime DESC
+LIMIT 100;
+```
 
-- 仅支持批量读取，不支持写入和 Structured Streaming。
-- Catalog 只支持根命名空间和 `default` 命名空间。
-- 当前按文件创建输入分区，不会拆分单个大文件。
-- `dt` 和 `hour` 来自文件修改时间，而不是日志内容中的事件时间。
+#### 3. 查询 Task 反序列化耗时
+
+```sql
+SET spark.sql.catalog.logfile.schema=
+  `Event` STRING,
+  `Stage ID` INT,
+  `Stage Attempt ID` INT,
+  `Task Info` STRUCT<`Task ID`: LONG>,
+  `Task Metrics` STRUCT<`Executor Deserialize Time`: LONG>;
+
+SELECT
+  app_id,
+  `Stage ID`,
+  `Stage Attempt ID`,
+  `Task Info`.`Task ID` AS task_id,
+  `Task Metrics`.`Executor Deserialize Time` AS deserialize_time
+FROM logfile.default.spark_log_file
+WHERE dt = '2023-04-24'
+  AND `Event` = 'SparkListenerTaskEnd'
+ORDER BY deserialize_time DESC
+LIMIT 50;
+```
+
+#### 4. 查询 Kyuubi 应用
+
+```sql
+SET spark.sql.catalog.logfile.schema=
+  `Event` STRING,
+  `Spark Properties` MAP<STRING, STRING>;
+
+SELECT DISTINCT app_id
+FROM logfile.default.spark_log_file
+WHERE dt = '2023-06-13'
+  AND `Event` = 'SparkListenerEnvironmentUpdate'
+  AND `Spark Properties`['spark.yarn.tags'] = 'KYUUBI'
+LIMIT 10;
+```
+
+#### 5. 查询 Kyuubi 倾斜 Stage
+
+```sql
+SET spark.sql.catalog.logfile.schema=
+  `Event` STRING,
+  `Stage ID` INT,
+  `Task Metrics` STRUCT<`Executor Run Time`: LONG>,
+  `Spark Properties` MAP<STRING, STRING>;
+
+WITH kyuubi_apps AS (
+  SELECT DISTINCT app_id
+  FROM logfile.default.spark_log_file
+  WHERE dt = '2023-06-13'
+    AND `Event` = 'SparkListenerEnvironmentUpdate'
+    AND `Spark Properties`['spark.yarn.tags'] = 'KYUUBI'
+),
+skew_stages AS (
+  SELECT
+    app_id,
+    `Stage ID`,
+    percentile(`Task Metrics`.`Executor Run Time`, 0.75) AS p75,
+    max(`Task Metrics`.`Executor Run Time`) AS max_runtime
+  FROM logfile.default.spark_log_file
+  WHERE dt = '2023-06-13'
+    AND `Event` = 'SparkListenerTaskEnd'
+    AND `Task Metrics`.`Executor Run Time` IS NOT NULL
+  GROUP BY app_id, `Stage ID`
+)
+SELECT s.*
+FROM kyuubi_apps k
+JOIN skew_stages s ON k.app_id = s.app_id
+ORDER BY s.max_runtime DESC
+LIMIT 100;
+```
+
+### 日志目录
+
+- 根目录下的文件以文件名作为 `app_id`，常见压缩后缀会被移除。
+- 根目录下的普通目录以目录名作为 `app_id`，目录内文件会被递归读取。
+- `eventlog_v2_<app_id>` 目录只读取名称以 `events_` 开头的文件。
+- 名称以 `.`、`_` 开头或以 `.inprogress` 结尾的路径会被忽略。
+
+不存在或为空的日志目录返回空结果。连接器仅支持批量读取，不支持写入和 Structured Streaming。
