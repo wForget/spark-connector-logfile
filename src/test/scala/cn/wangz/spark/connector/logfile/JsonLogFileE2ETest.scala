@@ -3,6 +3,8 @@ package cn.wangz.spark.connector.logfile
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
+import org.apache.spark.sql.connector.logfile.SparkEventLogTestDataGenerator
+
 class JsonLogFileE2ETest extends LogFileTestBase {
 
   test("read json log files via catalog") {
@@ -79,6 +81,72 @@ class JsonLogFileE2ETest extends LogFileTestBase {
 
       val values = df.select("value").collect().map(_.getString(0)).toSet
       assert(values === Set("v2 event 1", "v2 event 2", "v2 event 3"))
+    }
+  }
+
+  test("read lz4 compressed Spark event log") {
+    pendingUntilFixed {
+      val root = Files.createTempDirectory("spark-event-log-lz4-")
+      root.toFile.deleteOnExit()
+      val appId = "application_lz4_001"
+      SparkEventLogTestDataGenerator.write(
+        root.resolve(s"$appId.lz4"),
+        "lz4",
+        Seq(
+          """{"Event":"SparkListenerApplicationStart"}""",
+          """{"Event":"SparkListenerJobStart","Job ID":7}"""))
+
+      withCatalog("json_lz4_event_log_cat", root.toString, "json",
+        Map("schema" -> "`Event` STRING, `Job ID` LONG")) {
+        val rows = spark.sql(
+          """SELECT app_id, `Event`, `Job ID`
+            |FROM json_lz4_event_log_cat.default.spark_log_file
+            |ORDER BY `Event`""".stripMargin).collect()
+
+        assert(rows.map(_.getString(0)).toSet === Set(appId))
+        assert(rows.map(_.getString(1)).toSeq === Seq(
+          "SparkListenerApplicationStart", "SparkListenerJobStart"))
+        assert(rows(0).isNullAt(2))
+        assert(rows(1).getLong(2) === 7L)
+      }
+    }
+  }
+
+  test("read zstd compressed rolling Spark event log") {
+    if (sys.props.get("spark.test.profile").contains("spark-3.5")) {
+      pendingUntilFixed {
+        verifyZstdCompressedRollingEventLog()
+      }
+    } else {
+      verifyZstdCompressedRollingEventLog()
+    }
+  }
+
+  private def verifyZstdCompressedRollingEventLog(): Unit = {
+    val root = Files.createTempDirectory("spark-event-log-zstd-")
+    root.toFile.deleteOnExit()
+    val appId = "application_zstd_001"
+    val rollingDir = Files.createDirectories(root.resolve(s"eventlog_v2_$appId"))
+    rollingDir.toFile.deleteOnExit()
+    SparkEventLogTestDataGenerator.write(
+      rollingDir.resolve(s"events_1_$appId.zstd"),
+      "zstd",
+      Seq(
+        """{"Event":"SparkListenerApplicationStart"}""",
+        """{"Event":"SparkListenerJobStart","Job ID":11}"""))
+
+    withCatalog("json_zstd_event_log_cat", root.toString, "json",
+      Map("schema" -> "`Event` STRING, `Job ID` LONG")) {
+      val rows = spark.sql(
+        """SELECT app_id, `Event`, `Job ID`
+          |FROM json_zstd_event_log_cat.default.spark_log_file
+          |ORDER BY `Event`""".stripMargin).collect()
+
+      assert(rows.map(_.getString(0)).toSet === Set(appId))
+      assert(rows.map(_.getString(1)).toSeq === Seq(
+        "SparkListenerApplicationStart", "SparkListenerJobStart"))
+      assert(rows(0).isNullAt(2))
+      assert(rows(1).getLong(2) === 11L)
     }
   }
 
