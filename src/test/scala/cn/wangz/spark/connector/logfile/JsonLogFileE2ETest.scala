@@ -113,13 +113,7 @@ class JsonLogFileE2ETest extends LogFileTestBase {
   }
 
   test("read zstd compressed rolling Spark event log") {
-    if (sys.props.get("spark.test.profile").contains("spark-3.5")) {
-      pendingUntilFixed {
-        verifyZstdCompressedRollingEventLog()
-      }
-    } else {
-      verifyZstdCompressedRollingEventLog()
-    }
+    verifyZstdCompressedRollingEventLog()
   }
 
   private def verifyZstdCompressedRollingEventLog(): Unit = {
@@ -147,6 +141,17 @@ class JsonLogFileE2ETest extends LogFileTestBase {
         "SparkListenerApplicationStart", "SparkListenerJobStart"))
       assert(rows(0).isNullAt(2))
       assert(rows(1).getLong(2) === 11L)
+    }
+
+    withCatalog("json_zstd_event_log_infer_cat", root.toString, "json",
+      Map("inferSchema" -> "true")) {
+      val df = spark.sql(
+        "SELECT `Event`, `Job ID` " +
+          "FROM json_zstd_event_log_infer_cat.default.spark_log_file")
+
+      assert(df.schema.fieldNames.toSeq === Seq("Event", "Job ID"))
+      assert(df.collect().map(_.getString(0)).toSet === Set(
+        "SparkListenerApplicationStart", "SparkListenerJobStart"))
     }
   }
 

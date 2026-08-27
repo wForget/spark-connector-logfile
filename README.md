@@ -108,6 +108,7 @@ SET spark.sql.catalog.logfile.schema=`Event` STRING, `Job ID` LONG;
 ### Spark Event Log 使用案例
 
 以下案例假设 `logDir` 指向 Spark Event Log 目录。每个案例会按查询字段设置对应的 schema，执行时可根据实际 Spark 版本调整字段类型。
+Spark 3.5 和 Spark 4.2 均支持读取以 `.zstd` 结尾的 Zstd compressed Spark Event Log，包括 rolling event log 中由 flush 产生的连续 Zstd frame。
 
 #### 1. 查询任务失败信息
 

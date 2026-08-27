@@ -15,6 +15,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.connector.logfile.{
   CsvLogFilePartitionReaderFactory,
   JsonLogFilePartitionReaderFactory,
+  SparkZstdEventLogCodec,
   TextLogFilePartitionReaderFactory
 }
 import org.apache.spark.sql.connector.read._
@@ -134,6 +135,7 @@ object LogFileScan {
     options.asCaseSensitiveMap().asScala
       .filter { case (key, _) => key.toLowerCase(Locale.ROOT).startsWith("hadoop.") }
       .foreach { case (key, value) => conf.set(key.substring("hadoop.".length), value) }
+    SparkZstdEventLogCodec.register(conf)
     conf
   }
 

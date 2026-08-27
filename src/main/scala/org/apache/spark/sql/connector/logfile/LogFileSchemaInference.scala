@@ -31,6 +31,7 @@ object LogFileSchemaInference {
     options.asCaseSensitiveMap().asScala
       .filter { case (k, _) => k.toLowerCase(Locale.ROOT).startsWith("hadoop.") }
       .foreach { case (k, v) => hadoopConf.set(k.substring("hadoop.".length), v) }
+    SparkZstdEventLogCodec.register(hadoopConf)
 
     val logDirPath = new Path(logDir)
     val fs = logDirPath.getFileSystem(hadoopConf)
@@ -39,7 +40,10 @@ object LogFileSchemaInference {
     val sampleFiles = collectSampleFiles(fs, logDirPath)
     if (sampleFiles.isEmpty) return None
 
-    val params = options.asCaseSensitiveMap().asScala.toMap
+    // JsonDataSource creates its own Hadoop configuration from reader options during inference.
+    // Propagate the registered codec so compressed event logs are decoded there as well.
+    val params = options.asCaseSensitiveMap().asScala.toMap +
+      ("io.compression.codecs" -> SparkZstdEventLogCodec.configuredCodecs(hadoopConf))
     format match {
       case "json" =>
         val parsedOptions = new JSONOptionsInRead(
