@@ -230,6 +230,76 @@ ORDER BY s.max_runtime DESC
 LIMIT 100;
 ```
 
+#### 6. 分析 Stage 数据处理速率
+
+```sql
+SET spark.sql.catalog.logfile.schema=
+  `Event` STRING,
+  `Stage ID` INT,
+  `Stage Attempt ID` INT,
+  `Task End Reason` STRUCT<`Reason`: STRING>,
+  `Task Metrics` STRUCT<
+    `Executor Run Time`: LONG,
+    `Input Metrics`: STRUCT<
+      `Bytes Read`: LONG
+    >,
+    `Shuffle Read Metrics`: STRUCT<
+      `Remote Bytes Read`: LONG,
+      `Local Bytes Read`: LONG
+    >,
+    `Shuffle Write Metrics`: STRUCT<
+      `Shuffle Bytes Written`: LONG
+    >,
+    `Output Metrics`: STRUCT<
+      `Bytes Written`: LONG
+    >
+  >;
+
+WITH tasks AS (
+  SELECT
+    app_id,
+    `Stage ID` AS stage_id,
+    `Stage Attempt ID` AS stage_attempt_id,
+    `Task Metrics`.`Executor Run Time` AS executor_run_time_ms,
+    `Task Metrics`.`Input Metrics`.`Bytes Read` AS input_bytes,
+    `Task Metrics`.`Shuffle Read Metrics`.`Remote Bytes Read`
+      + `Task Metrics`.`Shuffle Read Metrics`.`Local Bytes Read`
+      AS shuffle_read_bytes,
+    `Task Metrics`.`Shuffle Write Metrics`.`Shuffle Bytes Written` AS shuffle_write_bytes,
+    `Task Metrics`.`Output Metrics`.`Bytes Written` AS output_bytes
+  FROM logfile.default.spark_log_file
+  WHERE app_id = 'application_123'
+    AND `Event` = 'SparkListenerTaskEnd'
+    AND `Task End Reason`.`Reason` = 'Success'
+    AND `Task Metrics`.`Executor Run Time` IS NOT NULL
+),
+stage_totals AS (
+  SELECT
+    app_id,
+    stage_id,
+    stage_attempt_id,
+    COUNT(*) AS task_count,
+    SUM(executor_run_time_ms) / 1000.0 AS executor_run_seconds,
+    (SUM(input_bytes) + SUM(shuffle_read_bytes)
+      + SUM(shuffle_write_bytes) + SUM(output_bytes)) / 1048576.0 AS processed_mib
+  FROM tasks
+  GROUP BY app_id, stage_id, stage_attempt_id
+)
+SELECT
+  app_id,
+  stage_id,
+  stage_attempt_id,
+  task_count,
+  executor_run_seconds,
+  processed_mib,
+  ROUND(processed_mib / executor_run_seconds, 2)
+    AS processed_mib_per_sec
+FROM stage_totals
+WHERE executor_run_seconds > 0
+  AND processed_mib >= 10 * 1024
+ORDER BY app_id, stage_id, stage_attempt_id;
+```
+
 ### 日志目录
 
 - 根目录下的文件以文件名作为 `app_id`，常见压缩后缀会被移除。
