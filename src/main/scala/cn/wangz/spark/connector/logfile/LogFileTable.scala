@@ -140,6 +140,19 @@ class LogFileTable(options: CaseInsensitiveStringMap)
       }.distinct.sorted
     }
   }
+
+  // Spark compares Table instances when matching logical plans against cached queries.
+  // Snapshot all options (with case-insensitive keys), including reader/Hadoop settings.
+  // Keep values unchanged and avoid schema inference or filesystem access during comparison.
+  private val tableOptions: Map[String, String] = options.asScala.toMap
+
+  override def equals(other: Any): Boolean = other match {
+    case that: LogFileTable =>
+      getClass == that.getClass && tableOptions == that.tableOptions
+    case _ => false
+  }
+
+  override def hashCode(): Int = tableOptions.hashCode()
 }
 
 object LogFileTable {
