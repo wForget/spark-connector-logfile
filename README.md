@@ -191,7 +191,7 @@ SELECT DISTINCT app_id
 FROM logfile.default.spark_log_file
 WHERE dt = '2023-06-13'
   AND `Event` = 'SparkListenerEnvironmentUpdate'
-  AND `Spark Properties`['spark.yarn.tags'] = 'KYUUBI'
+  AND `Spark Properties`['spark.yarn.tags'] LIKE '%KYUUBI%'
 LIMIT 10;
 ```
 
@@ -209,7 +209,7 @@ WITH kyuubi_apps AS (
   FROM logfile.default.spark_log_file
   WHERE dt = '2023-06-13'
     AND `Event` = 'SparkListenerEnvironmentUpdate'
-    AND `Spark Properties`['spark.yarn.tags'] = 'KYUUBI'
+    AND `Spark Properties`['spark.yarn.tags'] LIKE '%KYUUBI%'
 ),
 skew_stages AS (
   SELECT
@@ -268,7 +268,7 @@ WITH tasks AS (
     `Task Metrics`.`Shuffle Write Metrics`.`Shuffle Bytes Written` AS shuffle_write_bytes,
     `Task Metrics`.`Output Metrics`.`Bytes Written` AS output_bytes
   FROM logfile.default.spark_log_file
-  WHERE app_id = 'application_123'
+  WHERE dt = '2026-09-23'
     AND `Event` = 'SparkListenerTaskEnd'
     AND `Task End Reason`.`Reason` = 'Success'
     AND `Task Metrics`.`Executor Run Time` IS NOT NULL
@@ -297,7 +297,8 @@ SELECT
 FROM stage_totals
 WHERE executor_run_seconds > 0
   AND processed_mib >= 10 * 1024
-ORDER BY app_id, stage_id, stage_attempt_id;
+ORDER BY processed_mib_per_sec, app_id, stage_id, stage_attempt_id
+    LIMIT 100;
 ```
 
 ### 日志目录
